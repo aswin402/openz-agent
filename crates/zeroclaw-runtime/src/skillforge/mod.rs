@@ -6,6 +6,8 @@
 
 pub mod evaluate;
 pub mod integrate;
+pub mod local_evolution;
+pub mod prompt_optimizer;
 pub mod scout;
 
 use anyhow::Result;

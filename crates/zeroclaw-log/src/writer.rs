@@ -23,6 +23,7 @@ struct WriterState {
     policy: ResolvedPolicy,
     write_lock: Mutex<()>,
     last_hash: Mutex<String>,
+    audit_key: Vec<u8>,
 }
 
 static WRITER: OnceLock<parking_lot::RwLock<Option<Arc<WriterState>>>> = OnceLock::new();
@@ -71,6 +72,7 @@ fn compute_next_hash(previous_hash: &str, event: &mut LogEvent) -> String {
     use sha2::{Digest, Sha256};
 
     event.hash = None;
+    event.signature = None;
     let serialized = serde_json::to_string(event).unwrap_or_default();
 
     let mut hasher = Sha256::new();
@@ -79,6 +81,72 @@ fn compute_next_hash(previous_hash: &str, event: &mut LogEvent) -> String {
     let result = hasher.finalize();
 
     result.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn load_or_create_audit_key(workspace_dir: &Path) -> Result<Vec<u8>> {
+    let key_path = workspace_dir.join(".audit_key");
+    if key_path.exists() {
+        let hex_key = fs::read_to_string(&key_path)
+            .with_context(|| format!("Failed to read audit key from {}", key_path.display()))?;
+        let bytes = hex_decode(hex_key.trim()).context("Audit key file is corrupt")?;
+        if bytes.len() == 32 {
+            return Ok(bytes);
+        }
+    }
+
+    // Generate 32 bytes using Uuid v4
+    let mut key = Vec::with_capacity(32);
+    key.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
+    key.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
+
+    if let Some(parent) = key_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&key_path, hex_encode(&key))
+        .with_context(|| format!("Failed to write audit key to {}", key_path.display()))?;
+
+    // Set restrictive permissions
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(key)
+}
+
+pub(crate) fn hex_encode(data: &[u8]) -> String {
+    let mut s = String::with_capacity(data.len() * 2);
+    for b in data {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+pub(crate) fn hex_decode(s: &str) -> Result<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        anyhow::bail!("Odd-length hex string");
+    }
+    let mut res = Vec::with_capacity(s.len() / 2);
+    for i in (0..s.len()).step_by(2) {
+        let b = u8::from_str_radix(&s[i..i + 2], 16)
+            .map_err(|e| anyhow::Error::msg(format!("Invalid hex digit: {e}")))?;
+        res.push(b);
+    }
+    Ok(res)
+}
+
+pub(crate) fn compute_signature(key: &[u8], hash: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+
+    let mut mac =
+        HmacSha256::new_from_slice(key).unwrap_or_else(|_| HmacSha256::new(&Default::default()));
+    mac.update(hash.as_bytes());
+    let result = mac.finalize().into_bytes();
+    hex_encode(&result)
 }
 
 /// Initialize (or disable) the persistence writer from config. Idempotent.
@@ -105,10 +173,17 @@ pub fn init_from_config(config: &LogConfig, workspace_dir: &Path) {
         String::new()
     };
 
+    let audit_key = if policy.storage.is_enabled() {
+        load_or_create_audit_key(workspace_dir).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     let state = Arc::new(WriterState {
         policy,
         write_lock: Mutex::new(()),
         last_hash: Mutex::new(last_hash),
+        audit_key,
     });
     *slot().write() = Some(state);
 }
@@ -154,6 +229,10 @@ pub fn record_event(mut event: LogEvent) {
         let mut last_hash_guard = state.last_hash.lock();
         let next_hash = compute_next_hash(&last_hash_guard, &mut event);
         event.hash = Some(next_hash.clone());
+        if !state.audit_key.is_empty() {
+            let signature = compute_signature(&state.audit_key, &next_hash);
+            event.signature = Some(signature);
+        }
         *last_hash_guard = next_hash;
     }
 
@@ -389,9 +468,11 @@ mod tests {
         }
 
         let path = runtime_trace_path().unwrap();
+        *slot().write() = None;
 
         // The log integrity check should succeed initially
         let verified = crate::reader::verify_log_integrity(&path).unwrap();
+
         assert!(verified, "initial log integrity check failed");
 
         // Now let's tamper with the file by modifying a log message in the middle
@@ -445,5 +526,93 @@ mod tests {
         // Verify the entire file is still a single continuous valid hash chain!
         let verified_full = crate::reader::verify_log_integrity(&path).unwrap();
         assert!(verified_full, "hash chain broken across reinitialization");
+    }
+
+    #[test]
+    fn signature_verification_and_tampering() {
+        let _guard = WRITER_TEST_LOCK.lock();
+        let tmp = tempfile::tempdir().unwrap();
+        install_writer(tmp.path(), 10);
+
+        // Write 3 events
+        for i in 0..3 {
+            let mut ev = LogEvent::new(Severity::Info, "test", EventCategory::Agent);
+            ev.message = Some(format!("event-{i}"));
+            record_event(ev);
+        }
+
+        let path = runtime_trace_path().unwrap();
+        *slot().write() = None;
+
+        let verified = crate::reader::verify_log_integrity(&path).unwrap();
+
+        assert!(verified, "Initial verification failed");
+
+        // 1. Check that audit key was created with correct permissions
+        let key_path = tmp.path().join(".audit_key");
+        assert!(key_path.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&key_path).unwrap();
+            let mode = metadata.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "Audit key file must have 0600 permissions");
+        }
+
+        // 2. Tamper: Remove signature from an event
+        let contents = fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
+        let mut val: Value = serde_json::from_str(&lines[1]).unwrap();
+        val.as_object_mut().unwrap().remove("signature");
+        lines[1] = serde_json::to_string(&val).unwrap();
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let verified_no_sig = crate::reader::verify_log_integrity(&path).unwrap();
+        assert!(
+            !verified_no_sig,
+            "Verification should fail if signature is missing"
+        );
+
+        // Restore original contents
+        fs::write(&path, &contents).unwrap();
+
+        // 3. Tamper: Modify signature value to an invalid one
+        let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
+        let mut val: Value = serde_json::from_str(&lines[1]).unwrap();
+        val["signature"] = Value::String("a".repeat(64));
+        lines[1] = serde_json::to_string(&val).unwrap();
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let verified_bad_sig = crate::reader::verify_log_integrity(&path).unwrap();
+        assert!(
+            !verified_bad_sig,
+            "Verification should fail with invalid signature"
+        );
+
+        // Restore original contents
+        fs::write(&path, &contents).unwrap();
+
+        // 4. Tamper: Modify audit key content
+        let original_key = fs::read_to_string(&key_path).unwrap();
+        let tampered_key = "b".repeat(64);
+        fs::write(&key_path, tampered_key).unwrap();
+
+        let verified_bad_key = crate::reader::verify_log_integrity(&path).unwrap();
+        assert!(
+            !verified_bad_key,
+            "Verification should fail when audit key is modified"
+        );
+
+        // Restore key
+        fs::write(&key_path, original_key).unwrap();
+        assert!(crate::reader::verify_log_integrity(&path).unwrap());
+
+        // 5. Audit key missing (should verify only hashes)
+        fs::remove_file(&key_path).unwrap();
+        let verified_no_key = crate::reader::verify_log_integrity(&path).unwrap();
+        assert!(
+            verified_no_key,
+            "Should fall back to hash-only check and succeed if key is missing"
+        );
     }
 }

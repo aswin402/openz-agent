@@ -72,12 +72,14 @@
 - [Sandboxing](./security/sandboxing.md)
 - [Remote execution (SSH)](./security/remote-execution.md)
 - [Tool receipts](./security/tool-receipts.md)
+- [Cryptographic audit trails](./security/audit-trails.md)
 
 # Operations
 
 - [Overview](./ops/overview.md)
 - [Service & daemon](./ops/service.md)
 - [Logs & observability](./ops/observability.md)
+- [Dynamic self-evolution](./ops/self-evolution.md)
 - [Cost tracking](./ops/cost-tracking.md)
 - [Troubleshooting](./ops/troubleshooting.md)
 - [Network deployment](./ops/network-deployment.md)

@@ -4889,6 +4889,10 @@ pub struct SkillsConfig {
     #[serde(default)]
     #[nested]
     pub skill_improvement: SkillImprovementConfig,
+    /// Automatically optimize the system prompt using genetic optimization.
+    /// Default: `false`.
+    #[serde(default)]
+    pub prompt_optimization_enabled: bool,
 }
 
 /// Autonomous skill creation configuration (`[skills.skill_creation]` section).

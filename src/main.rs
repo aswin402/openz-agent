@@ -48,11 +48,20 @@ enum Commands {
     /// Run the interactive configuration wizard
     Configure,
     /// View the runtime event logs
-    Logs,
+    Logs {
+        /// Verify the cryptographic integrity of the log file
+        #[arg(long)]
+        verify: bool,
+    },
     /// Configure API keys/environment variables for MCP servers
     McpSetup,
     /// Configure and add a new subagent to the config
     AgentSetup,
+    /// Manage hands task blueprints and self-evolution
+    Hands {
+        #[command(subcommand)]
+        command: zeroclaw::HandsCommands,
+    },
 }
 
 #[tokio::main]
@@ -91,9 +100,13 @@ async fn main() -> Result<()> {
                 let mut config = Config::load_or_init().await?;
                 run_configure_wizard(&mut config).await?;
             }
-            Commands::Logs => {
+            Commands::Logs { verify } => {
                 let config = Config::load_or_init().await?;
-                print_logs(&config)?;
+                if verify {
+                    run_log_verification(&config)?;
+                } else {
+                    print_logs(&config)?;
+                }
             }
             Commands::McpSetup => {
                 let mut config = Config::load_or_init().await?;
@@ -102,6 +115,10 @@ async fn main() -> Result<()> {
             Commands::AgentSetup => {
                 let mut config = Config::load_or_init().await?;
                 run_agent_setup_wizard(&mut config).await?;
+            }
+            Commands::Hands { command } => {
+                let config = Config::load_or_init().await?;
+                zeroclaw::hands::handle_command(command, &config).await?;
             }
         }
         return Ok(());
@@ -217,6 +234,7 @@ fn print_openz_help() {
     println!("  openz mcp-setup         Configure API keys for MCP servers");
     println!("  openz agent-setup       Configure and add a new subagent");
     println!("  openz logs              View full runtime logs");
+    println!("  openz hands             Manage task blueprints and self-evolution");
     println!();
 }
 
@@ -427,6 +445,57 @@ fn print_logs(config: &Config) -> Result<()> {
             );
         } else {
             println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_log_verification(config: &Config) -> Result<()> {
+    let log_path = config
+        .config_path
+        .parent()
+        .context("Failed to get config path parent")?
+        .join("state/runtime-trace.jsonl");
+
+    if !log_path.exists() {
+        println!("No logs found at {}", log_path.display());
+        return Ok(());
+    }
+
+    println!(
+        "Verifying cryptographic integrity of logs at {}...",
+        log_path.display()
+    );
+
+    match zeroclaw_log::reader::verify_log_integrity(&log_path) {
+        Ok(true) => {
+            println!(
+                "{}",
+                console::style(
+                    "✓ Log integrity verified: chain is continuous and signatures match."
+                )
+                .green()
+                .bold()
+            );
+        }
+        Ok(false) => {
+            println!(
+                "{}",
+                console::style("✗ Log integrity check failed: potential tampering detected!")
+                    .red()
+                    .bold()
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            println!(
+                "{}",
+                console::style(format!("✗ Verification error occurred: {err}"))
+                    .red()
+                    .bold()
+            );
+            std::process::exit(1);
         }
     }
 

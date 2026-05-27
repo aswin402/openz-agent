@@ -339,6 +339,9 @@ pub struct LogEvent {
     /// Cryptographic hash linking this log entry to the previous one in a Merkle Hash-Chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
+    /// Cryptographic signature of the event hash using the workspace audit key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 fn default_schema_version() -> u8 {
@@ -370,6 +373,7 @@ impl LogEvent {
             attributes: Value::Null,
             schema_version: LogEvent::SCHEMA_VERSION,
             hash: None,
+            signature: None,
         }
     }
 

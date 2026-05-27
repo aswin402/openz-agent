@@ -767,4 +767,22 @@ Examples:
         #[arg(long)]
         model: Option<String>,
     },
+    /// Package repeating local execution history into reusable skills
+    Evolve {
+        /// Configured agent alias whose logs to analyze
+        #[arg(short = 'a', long = "agent")]
+        agent_alias: String,
+    },
+    /// Run genetic prompt optimization on the agent's system prompt (IDENTITY.md)
+    OptimizePrompt {
+        /// Configured agent alias whose prompt to optimize
+        #[arg(short = 'a', long = "agent")]
+        agent_alias: String,
+        /// Number of genetic generations (default 3)
+        #[arg(short = 'g', long = "generations", default_value = "3")]
+        generations: usize,
+        /// Path to evaluation suite file (JSON)
+        #[arg(short = 'e', long = "eval-suite")]
+        eval_suite: String,
+    },
 }

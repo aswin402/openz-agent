@@ -257,10 +257,28 @@ pub fn current_log_path() -> Option<PathBuf> {
 /// Returns `Ok(true)` if all hashes are correct and intact, `Ok(false)`
 /// if any hash is missing or incorrect, and `Err` if an IO or parsing error occurs.
 pub fn verify_log_integrity(path: &Path) -> Result<bool> {
+    use crate::writer::{compute_signature, hex_decode};
     use sha2::{Digest, Sha256};
 
     if !path.exists() {
         return Ok(true);
+    }
+
+    // Try to load the audit key
+    let mut audit_key = Vec::new();
+    if let Some(parent) = path.parent() {
+        let mut key_path = parent.join(".audit_key");
+        if !key_path.exists()
+            && let Some(grandparent) = parent.parent()
+        {
+            key_path = grandparent.join(".audit_key");
+        }
+        if key_path.exists()
+            && let Ok(hex_key) = std::fs::read_to_string(&key_path)
+            && let Ok(bytes) = hex_decode(hex_key.trim())
+        {
+            audit_key = bytes;
+        }
     }
 
     let file = File::open(path).with_context(|| format!("opening log: {}", path.display()))?;
@@ -286,7 +304,26 @@ pub fn verify_log_integrity(path: &Path) -> Result<bool> {
             }
         };
 
-        // Re-serialize without hash
+        let actual_sig = event.signature.take();
+
+        // If audit_key is loaded, verify signature
+        if !audit_key.is_empty() {
+            let Some(sig) = actual_sig else {
+                tracing::warn!("Verification failed: missing signature at line {}", idx + 1);
+                return Ok(false);
+            };
+
+            let expected_sig = compute_signature(&audit_key, &actual_hash);
+            if sig != expected_sig {
+                tracing::warn!(
+                    "Verification failed: signature mismatch at line {}",
+                    idx + 1
+                );
+                return Ok(false);
+            }
+        }
+
+        // Re-serialize without hash/signature
         let serialized =
             serde_json::to_string(&event).context("serializing event for verification")?;
 

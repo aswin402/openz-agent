@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/docs/assets/zeroclaw-banner.png" alt="ZeroClaw" width="600" />
 </p>
 
-<h1 align="center">🦀 ZeroClaw — Personal AI Assistant</h1>
+<h1 align="center">🦀 ZeroClaw — Personal AI Assistant (v0.0.1)</h1>
 
 <p align="center">
   <strong>You own the agent. You own the data. You own the machine it runs on.</strong>
@@ -78,6 +78,8 @@ Full walkthrough: [Quick start](docs/book/src/getting-started/quick-start.md) �
 - **Security-first, with escape hatches** — default autonomy is `supervised`: medium-risk ops require approval, high-risk blocked. Workspace boundaries, command policy, OS-level sandboxes (Landlock / Bubblewrap / Seatbelt / Docker), and cryptographic [tool receipts](docs/book/src/security/tool-receipts.md) on every action. [YOLO mode](docs/book/src/getting-started/yolo.md) exists for trusted dev environments.
 - **Remote Execution (SSH)** — run shell execution tools on remote servers over SSH instead of the host machine to isolate testing and deployments. See [Remote Execution](docs/book/src/security/remote-execution.md).
 - **"Hands" Blueprints** — out-of-the-box pre-packaged agent workflows (schedules, prompt templates, and tools allowlist) for background tasks like OSINT digests, site monitoring, and lead generation. See [Hands Blueprints](docs/book/src/tools/blueprints.md).
+- **Dynamic Self-Evolution** — autonomous skill synthesis and genetic prompt optimization to continuously improve the agent's prompt instructions and turn command histories into native tools. See [Dynamic Self-Evolution](docs/book/src/ops/self-evolution.md).
+- **Cryptographic Audit Trails** — secure log validation and tamper detection using sequential SHA-256 hash chaining and HMAC-SHA256 log signing. See [Cryptographic Audit Trails](docs/book/src/security/audit-trails.md).
 - **Hardware-capable** — GPIO / I2C / SPI / USB on Raspberry Pi, STM32, Arduino, and ESP32 via the `Peripheral` trait. See [Hardware](docs/book/src/hardware/index.md).
 - **Gateway + dashboard** — HTTP / WebSocket gateway for clients, with a web dashboard for chat, memory browsing, config editing, cron management, and tool inspection.
 - **SOP engine** — event-triggered [Standard Operating Procedures](docs/book/src/sop/index.md) (MQTT / webhook / cron / peripheral) with approval gates and resumable runs.

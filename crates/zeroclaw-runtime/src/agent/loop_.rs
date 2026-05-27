@@ -5402,6 +5402,84 @@ After the code block, write a brief explanation (one line) of the improvement st
             cost_usd: None,
         });
 
+        // Trigger local skill evolution automatically if enabled.
+        if config.skills.skill_creation.enabled {
+            let agent_workspace = config.agent_workspace_dir(agent_alias);
+            let evolver = crate::skillforge::local_evolution::LocalEvolution::new(agent_workspace);
+            ::zeroclaw_log::record!(
+                INFO,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                "Triggering background skill evolution..."
+            );
+            match evolver
+                .evolve(agent_alias, &config, model_provider.as_ref(), &model_name)
+                .await
+            {
+                Ok(evolved) => {
+                    if !evolved.is_empty() {
+                        ::zeroclaw_log::record!(
+                            INFO,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Note
+                            )
+                            .with_attrs(
+                                ::serde_json::json!({"count": evolved.len(), "skills": evolved})
+                            ),
+                            "Successfully auto-evolved new skill(s)"
+                        );
+                    }
+                }
+                Err(e) => {
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                        "Background skill auto-evolution failed"
+                    );
+                }
+            }
+        }
+
+        // Trigger background prompt optimization automatically if enabled.
+        if config.skills.prompt_optimization_enabled {
+            let agent_workspace = config.agent_workspace_dir(agent_alias);
+            let optimizer =
+                crate::skillforge::prompt_optimizer::PromptOptimizer::new(agent_workspace);
+            ::zeroclaw_log::record!(
+                INFO,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                "Triggering background prompt optimization..."
+            );
+            match optimizer
+                .optimize(
+                    agent_alias,
+                    &config,
+                    model_provider.as_ref(),
+                    &model_name,
+                    1,  // 1 generation for background runs to keep it fast
+                    "", // default eval suite
+                )
+                .await
+            {
+                Ok(_) => {
+                    ::zeroclaw_log::record!(
+                        INFO,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                        "Successfully completed background prompt optimization"
+                    );
+                }
+                Err(e) => {
+                    ::zeroclaw_log::record!(
+                        WARN,
+                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                        "Background prompt optimization failed"
+                    );
+                }
+            }
+        }
+
         Ok(final_output)
     };
     let sender = overrides.tui_sender.clone();
