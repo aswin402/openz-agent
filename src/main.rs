@@ -589,11 +589,23 @@ fn list_sessions() -> Vec<SessionFile> {
                                             }
                                         }
                                         if let Some(msg) = last_msg {
-                                            let trimmed_msg = msg.trim().replace('\n', " ");
+                                            let mut trimmed_msg = msg.trim().replace('\n', " ");
+                                            if trimmed_msg.starts_with('[') {
+                                                if let Some(close_idx) = trimmed_msg.find(']') {
+                                                    let ts_content = &trimmed_msg[1..close_idx];
+                                                    if ts_content.len() >= 16 {
+                                                        let clean_ts = &ts_content[..16];
+                                                        trimmed_msg = format!(
+                                                            "[{clean_ts}]{}",
+                                                            &trimmed_msg[close_idx + 1..]
+                                                        );
+                                                    }
+                                                }
+                                            }
                                             if trimmed_msg.len() > 50 {
                                                 preview = format!("{}...", &trimmed_msg[0..50]);
                                             } else {
-                                                preview = trimmed_msg.to_string();
+                                                preview = trimmed_msg;
                                             }
                                         }
                                     }
