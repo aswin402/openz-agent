@@ -3721,7 +3721,7 @@ pub async fn run(
                 .map(|r| build_hardware_context(r, &effective_msg, &board_names, rag_limit))
                 .unwrap_or_default();
             let context = format!("{mem_context}{hw_context}");
-            let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z");
+            let now = chrono::Local::now().format("%Y-%m-%d %H:%M");
             let enriched = if context.is_empty() {
                 format!("[{now}] {effective_msg}")
             } else {
@@ -4839,7 +4839,7 @@ pub async fn run(
                         })
                         .unwrap_or_default();
                     let context = format!("{mem_context}{hw_context}");
-                    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z");
+                    let now = chrono::Local::now().format("%Y-%m-%d %H:%M");
                     let enriched = if context.is_empty() {
                         format!("[{now}] {effective_input}")
                     } else {
@@ -6056,7 +6056,7 @@ pub async fn process_message(
             .map(|r| build_hardware_context(r, effective_msg_ref, &board_names, rag_limit))
             .unwrap_or_default();
         let context = format!("{mem_context}{hw_context}");
-        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z");
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M");
         let enriched = if context.is_empty() {
             format!("[{now}] {effective_message}")
         } else {
