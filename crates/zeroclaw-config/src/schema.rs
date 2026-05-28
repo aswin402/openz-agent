@@ -13169,11 +13169,11 @@ impl Default for Config {
     fn default() -> Self {
         let home =
             UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
-        let zeroclaw_dir = home.join(".zeroclaw");
+        let config_dir = default_config_dir().unwrap_or_else(|_| home.join(".openz"));
 
         Self {
-            data_dir: zeroclaw_dir.join("data"),
-            config_path: zeroclaw_dir.join("config.toml"),
+            data_dir: config_dir.join("data"),
+            config_path: config_dir.join("config.toml"),
             env_overridden_paths: std::collections::HashSet::new(),
             pre_override_snapshots: std::collections::HashMap::new(),
             dirty_paths: std::collections::HashSet::new(),
@@ -13332,6 +13332,12 @@ pub fn resolve_config_dir_for_data(data_dir: &Path) -> (PathBuf, PathBuf) {
                 if legacy_dir_openz.exists() {
                     return (legacy_dir_openz.clone(), data_config_dir);
                 }
+            }
+            if legacy_dir.join("config.toml").exists() || legacy_dir.exists() {
+                return (legacy_dir, data_config_dir);
+            }
+            if let Some(ref legacy_dir_openz) = legacy_config_dir_openz {
+                return (legacy_dir_openz.clone(), data_config_dir);
             }
             return (legacy_dir, data_config_dir);
         }
@@ -15947,7 +15953,7 @@ mod tests {
     async fn expand_tilde_path_expands_tilde_when_home_set() {
         // This test verifies that tilde expansion works when HOME is set.
         // In normal environments, HOME is set, so ~ should expand.
-        let path = expand_tilde_path("~/.zeroclaw");
+        let path = expand_tilde_path("~/.openz");
         // The path should not literally start with '~' if HOME is set
         // (it should be expanded to the actual home directory)
         if std::env::var("HOME").is_ok() {
@@ -18795,7 +18801,7 @@ model = "primary-model"
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
         let workspace_dir = temp_home.join("workspace");
-        let resolved_config_path = temp_home.join(".zeroclaw").join("config.toml");
+        let resolved_config_path = temp_home.join(".openz").join("config.toml");
 
         let original_home = std::env::var("HOME").ok();
         // SAFETY: test-only, single-threaded test runner.
@@ -19051,7 +19057,7 @@ wire_api = "ws"
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
         let workspace_dir = temp_home.join("workspace");
-        let legacy_config_dir = temp_home.join(".zeroclaw");
+        let legacy_config_dir = temp_home.join(".openz");
         let legacy_config_path = legacy_config_dir.join("config.toml");
 
         let original_home = std::env::var("HOME").ok();
@@ -19139,7 +19145,7 @@ default_model = "legacy-model"
         let _env_guard = env_override_lock().await;
         let temp_home =
             std::env::temp_dir().join(format!("zeroclaw_test_home_{}", uuid::Uuid::new_v4()));
-        let config_dir = temp_home.join(".zeroclaw");
+        let config_dir = temp_home.join(".openz");
         let config_path = config_dir.join("config.toml");
 
         fs::create_dir_all(&config_dir).await.unwrap();

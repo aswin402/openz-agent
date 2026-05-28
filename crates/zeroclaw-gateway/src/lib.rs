@@ -1028,12 +1028,15 @@ pub async fn run_gateway(
                 .and_then(|p| p.parent().map(|d| d.join("web/dist")))
                 .unwrap_or_default(),
             // Docker / packaged layout
+            std::path::PathBuf::from("/openz-data/web/dist"),
             std::path::PathBuf::from("/zeroclaw-data/web/dist"),
             // AUR / system package
+            std::path::PathBuf::from("/usr/share/openzlabs/web/dist"),
             std::path::PathBuf::from("/usr/share/zeroclawlabs/web/dist"),
         ];
         // XDG data home (prebuilt binary installer)
         if let Some(data_dir) = dirs_data_local() {
+            candidates.push(data_dir.join("openz/web/dist"));
             candidates.push(data_dir.join("zeroclaw/web/dist"));
         }
         candidates

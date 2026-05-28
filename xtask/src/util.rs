@@ -150,20 +150,20 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
 }
 
-/// Read a `[providers.models.<name>]` entry from ~/.zeroclaw/config.toml.
+/// Read a `[providers.models.<name>]` entry from ~/.openz/config.toml.
 pub fn read_model_provider_config(provider_name: &str) -> anyhow::Result<ProviderConfig> {
     let home =
         std::env::var("HOME").unwrap_or_else(|_| std::env::var("USERPROFILE").unwrap_or_default());
     let candidates = [
+        format!("{home}/.openz/config.toml"),
         format!("{home}/.zeroclaw/config.toml"),
+        format!("{home}/.config/openz/config.toml"),
         format!("{home}/.config/zeroclaw/config.toml"),
     ];
     let raw = candidates
         .iter()
         .find_map(|p| std::fs::read_to_string(p).ok())
-        .ok_or_else(|| {
-            anyhow::Error::msg("config.toml not found (tried ~/.zeroclaw/config.toml)")
-        })?;
+        .ok_or_else(|| anyhow::Error::msg("config.toml not found (tried ~/.openz/config.toml)"))?;
 
     let table: toml::Table = raw.parse()?;
     let model_provider = table

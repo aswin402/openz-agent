@@ -184,13 +184,20 @@ impl AgentzWorkflow {
                     "Files target for modifications:\n{}",
                     console::style(&files_to_change).dim()
                 );
-                print!("Do you approve this plan? [y/N]: ");
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-                let mut input = String::new();
-                let _ = std::io::stdin().read_line(&mut input)?;
-                let input = input.trim().to_lowercase();
-                if input != "y" && input != "yes" {
+                use dialoguer::{theme::ColorfulTheme, Select};
+                let mut theme = ColorfulTheme::default();
+                let purple = console::Style::new().color256(99).bold();
+                theme.active_item_style = purple;
+                theme.prompt_style = console::Style::new().bold();
+
+                let choices = vec!["Yes, approve plan", "No, abort workflow"];
+                let selection = Select::with_theme(&theme)
+                    .with_prompt("Do you approve this plan?")
+                    .items(&choices)
+                    .default(0)
+                    .interact()?;
+
+                if selection != 0 {
                     println!(
                         "{}",
                         console::style("Workflow execution aborted by user.")

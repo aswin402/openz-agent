@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# ── ZeroClaw installer ───────────────────────────────────────────
+# ── OpenZ installer ───────────────────────────────────────────
 # Builds and installs ZeroClaw from source.
 # All feature lists and version info read from Cargo.toml — nothing hardcoded.
 # POSIX sh — no bash required. Works on Alpine, Debian, macOS, everywhere.
@@ -53,7 +53,7 @@ validate_feature() {
 list_features() {
   parse_cargo_toml "$1"
   echo
-  printf "%s — available build features\n" "$(bold "ZeroClaw v${VERSION}")"
+  printf "%s — available build features\n" "$(bold "OpenZ v${VERSION}")"
   echo
 
   printf "  %s\n" "$(bold "Default") (included unless --minimal):"
@@ -165,12 +165,12 @@ install_prebuilt() {
     return 1
   fi
 
-  asset_name="zeroclaw-${triple}.tar.gz"
+  asset_name="openz-${triple}.tar.gz"
   asset_url="https://github.com/zeroclaw-labs/zeroclaw/releases/download/${version}/${asset_name}"
   sha256_url="https://github.com/zeroclaw-labs/zeroclaw/releases/download/${version}/SHA256SUMS"
 
   echo
-  printf "%s\n" "$(bold "Installing ZeroClaw ${version} (pre-built)")"
+  printf "%s\n" "$(bold "Installing OpenZ ${version} (pre-built)")"
   info "Platform: $triple"
   info "Source:   $asset_url"
   echo
@@ -178,19 +178,19 @@ install_prebuilt() {
   # Resolve platform-correct web data directory to match gateway auto-detect
   case "$(uname -s)" in
     Darwin)
-      web_data_dir="${HOME}/Library/Application Support/zeroclaw/web/dist"
+      web_data_dir="${HOME}/Library/Application Support/openz/web/dist"
       ;;
     MINGW*|CYGWIN*|MSYS*)
-      web_data_dir="${LOCALAPPDATA}/zeroclaw/web/dist"
+      web_data_dir="${LOCALAPPDATA}/openz/web/dist"
       ;;
     *)
-      web_data_dir="${XDG_DATA_HOME:-${PREFIX}/.local/share}/zeroclaw/web/dist"
+      web_data_dir="${XDG_DATA_HOME:-${PREFIX}/.local/share}/openz/web/dist"
       ;;
   esac
 
   if [ "$DRY_RUN" = true ]; then
     info "[dry-run] Would download $asset_url"
-    info "[dry-run] Would install to $CARGO_HOME/bin/zeroclaw"
+    info "[dry-run] Would install to $CARGO_HOME/bin/openz"
     info "[dry-run] Would install web dashboard to $web_data_dir"
     return 0
   fi
@@ -229,7 +229,7 @@ install_prebuilt() {
 
   tar -xzf "$tmp_dir/$asset_name" -C "$tmp_dir"
   mkdir -p "$CARGO_HOME/bin"
-  install -m 755 "$tmp_dir/zeroclaw" "$CARGO_HOME/bin/zeroclaw"
+  install -m 755 "$tmp_dir/openz" "$CARGO_HOME/bin/openz"
 
   # Install web dashboard assets bundled in the release tarball
   if [ -d "$tmp_dir/web/dist" ]; then
@@ -247,7 +247,7 @@ install_prebuilt() {
 
 usage() {
   cat <<EOF
-$(bold "ZeroClaw installer")
+$(bold "OpenZ installer")
 
 Usage: $0 [options]
 
@@ -278,11 +278,11 @@ Examples:
   $0 --skip-onboard                            # install only, configure later
   $0 --prefix /tmp/zc-test --skip-onboard      # isolated test install
   $0 --dry-run --prebuilt                      # preview without installing
-  $0 --uninstall                               # remove ZeroClaw
+  $0 --uninstall                               # remove OpenZ
 
 Environment:
-  ZEROCLAW_INSTALL_DIR   Source checkout override (default: PREFIX/.zeroclaw/src)
-  ZEROCLAW_CARGO_FEATURES  Extra cargo features (legacy; prefer --features)
+  OPENZ_INSTALL_DIR   Source checkout override (default: PREFIX/.openz/src)
+  OPENZ_CARGO_FEATURES  Extra cargo features (legacy; prefer --features)
 EOF
 }
 
@@ -290,10 +290,10 @@ EOF
 
 do_uninstall() {
   echo
-  printf "%s\n" "$(bold "Uninstalling ZeroClaw")"
+  printf "%s\n" "$(bold "Uninstalling OpenZ")"
   echo
 
-  local bin="$CARGO_HOME/bin/zeroclaw"
+  local bin="$CARGO_HOME/bin/openz"
 
   if [ -f "$bin" ]; then
     "$bin" service stop 2>/dev/null || true
@@ -304,7 +304,7 @@ do_uninstall() {
     warn "Binary not found at $bin"
   fi
 
-  local config_dir="$PREFIX/.zeroclaw"
+  local config_dir="$PREFIX/.openz"
   if [ -d "$config_dir" ]; then
     if [ -t 0 ]; then
       printf "  Remove config and data (%s)? [y/N] " "$config_dir"
@@ -320,7 +320,7 @@ do_uninstall() {
 
   # Check if another zeroclaw still lurks in PATH
   local other_bin
-  other_bin=$(PATH="$ORIGINAL_PATH" command -v zeroclaw 2>/dev/null || true)
+  other_bin=$(PATH="$ORIGINAL_PATH" command -v openz 2>/dev/null || true)
   if [ -n "$other_bin" ]; then
     local other_version
     other_version=$("$other_bin" --version 2>/dev/null | awk '{print $NF}' || echo "unknown")
@@ -330,7 +330,7 @@ do_uninstall() {
   fi
 
   echo
-  info "ZeroClaw uninstalled"
+  info "OpenZ uninstalled"
   exit 0
 }
 
@@ -343,7 +343,7 @@ do_uninstall() {
 # `[providers.fallback]` line — i.e. some provider is configured. Empty or
 # default config files still trigger the prompt.
 onboarding_needed() {
-  cfg="$PREFIX/.zeroclaw/config.toml"
+  cfg="$PREFIX/.openz/config.toml"
   [ -f "$cfg" ] || return 0   # no config → onboard
   # Already-configured signal: any of these patterns means a provider was set.
   if grep -qE '^\[providers\.models\.|^fallback *=|^default_provider *=' "$cfg" 2>/dev/null; then
@@ -492,8 +492,8 @@ PRESET=""         # ""=unset, "minimal"=alias for --minimal, "full"=default-feat
 WITH_GATEWAY=""   # ""=unset (preset/feature default applies), "true"/"false"=explicit toggle
 
 # Support legacy env var
-if [ -n "${ZEROCLAW_CARGO_FEATURES:-}" ]; then
-  USER_FEATURES="${USER_FEATURES:+$USER_FEATURES,}$ZEROCLAW_CARGO_FEATURES"
+if [ -n "${OPENZ_CARGO_FEATURES:-}" ]; then
+  USER_FEATURES="${USER_FEATURES:+$USER_FEATURES,}$OPENZ_CARGO_FEATURES"
 fi
 
 while [ $# -gt 0 ]; do
@@ -531,7 +531,7 @@ while [ $# -gt 0 ]; do
     -V|--version)
       if [ -f "Cargo.toml" ]; then
         parse_cargo_toml "Cargo.toml"
-        echo "install.sh for ZeroClaw v$VERSION"
+        echo "install.sh for OpenZ v$VERSION"
       else
         echo "install.sh (version unknown — not in repo)"
       fi
@@ -545,7 +545,7 @@ done
 
 CARGO_HOME="${CARGO_HOME:-$PREFIX/.cargo}"
 RUSTUP_HOME="${RUSTUP_HOME:-$PREFIX/.rustup}"
-INSTALL_DIR="${ZEROCLAW_INSTALL_DIR:-$PREFIX/.zeroclaw/src}"
+INSTALL_DIR="${OPENZ_INSTALL_DIR:-$PREFIX/.openz/src}"
 ORIGINAL_PATH="$PATH"
 PATH="$CARGO_HOME/bin:$PATH"
 export CARGO_HOME RUSTUP_HOME PATH
@@ -609,7 +609,7 @@ if [ "$INSTALL_MODE" = "prebuilt" ]; then
 fi
 
 [ "${PREBUILT_OK:-false}" = true ] && [ "$DRY_RUN" != true ] && {
-  BIN="$CARGO_HOME/bin/zeroclaw"
+  BIN="$CARGO_HOME/bin/openz"
   if [ -f "$BIN" ]; then
     NEW_VERSION=$("$BIN" --version 2>/dev/null | awk '{print $NF}' || echo "?")
     SIZE=$(du -h "$BIN" | awk '{print $1}')
@@ -628,7 +628,7 @@ fi
 if [ "${SOURCE_SKIPPED:-false}" != true ]; then
 
 echo
-printf "%s\n" "$(bold "ZeroClaw — source install")"
+printf "%s\n" "$(bold "OpenZ — source install")"
 if [ "$PREFIX" != "$HOME" ]; then
   printf "  prefix: %s\n" "$(bold "$PREFIX")"
 fi
@@ -681,7 +681,7 @@ fi
 if [ "$DRY_RUN" != true ]; then
   RUST_VERSION=$(rustc --version | awk '{print $2}')
   if ! version_gte "$RUST_VERSION" "$MSRV"; then
-    die "Rust $RUST_VERSION is too old. ZeroClaw requires $MSRV+ (edition $EDITION). Run: rustup update stable"
+    die "Rust $RUST_VERSION is too old. OpenZ requires $MSRV+ (edition $EDITION). Run: rustup update stable"
   fi
   info "Rust $RUST_VERSION (>= $MSRV)"
 fi
@@ -765,10 +765,10 @@ fi
 
 # ── Detect existing installs ──────────────────────────────────────
 
-PATH_BIN=$(PATH="$ORIGINAL_PATH" command -v zeroclaw 2>/dev/null || true)
+PATH_BIN=$(PATH="$ORIGINAL_PATH" command -v openz 2>/dev/null || true)
 if [ -n "$PATH_BIN" ]; then
   PATH_VERSION=$("$PATH_BIN" --version 2>/dev/null | awk '{print $NF}' || echo "unknown")
-  TARGET_BIN="$CARGO_HOME/bin/zeroclaw"
+  TARGET_BIN="$CARGO_HOME/bin/openz"
   if [ "$PATH_BIN" != "$TARGET_BIN" ]; then
     warn "zeroclaw found at $PATH_BIN (v$PATH_VERSION)"
     warn "This install targets $TARGET_BIN"
@@ -801,8 +801,8 @@ if [ "$DRY_RUN" = true ]; then
   printf "%s\n" "$(bold "Dry run — nothing will be built or installed")"
   echo
   info "Source:   $INSTALL_DIR"
-  info "Binary:   $CARGO_HOME/bin/zeroclaw"
-  info "Config:   $PREFIX/.zeroclaw/"
+  info "Binary:   $CARGO_HOME/bin/openz"
+  info "Config:   $PREFIX/.openz/"
   info "Rust:     $CARGO_HOME (CARGO_HOME), $RUSTUP_HOME (RUSTUP_HOME)"
   echo
   if [ -n "${CARGO_PROFILE_RELEASE_LTO:-}" ]; then
@@ -826,7 +826,7 @@ fi
 # ── Build and install ─────────────────────────────────────────────
 
 echo
-printf "%s\n" "$(bold "Building ZeroClaw v$VERSION")"
+printf "%s\n" "$(bold "Building OpenZ v$VERSION")"
 if [ -n "$CARGO_FLAGS" ]; then
   info "Feature flags: $CARGO_FLAGS"
 else
@@ -856,14 +856,14 @@ fi
 
 # ── Summary ───────────────────────────────────────────────────────
 
-BIN="$CARGO_HOME/bin/zeroclaw"
+BIN="$CARGO_HOME/bin/openz"
 if [ -f "$BIN" ]; then
   SIZE=$(du -h "$BIN" | awk '{print $1}')
   NEW_VERSION=$("$BIN" --version 2>/dev/null | awk '{print $NF}' || echo "$VERSION")
   echo
   info "Installed: $BIN (v$NEW_VERSION, $SIZE)"
 
-  ACTIVE_BIN=$(PATH="$ORIGINAL_PATH" command -v zeroclaw 2>/dev/null || true)
+  ACTIVE_BIN=$(PATH="$ORIGINAL_PATH" command -v openz 2>/dev/null || true)
   if [ -n "$ACTIVE_BIN" ] && [ "$ACTIVE_BIN" != "$BIN" ]; then
     ACTIVE_VERSION=$("$ACTIVE_BIN" --version 2>/dev/null | awk '{print $NF}' || echo "unknown")
     echo
@@ -877,7 +877,7 @@ fi
 
 fi  # end source build block
 
-BIN="$CARGO_HOME/bin/zeroclaw"
+BIN="$CARGO_HOME/bin/openz"
 
 # ── PATH guidance ─────────────────────────────────────────────────
 
@@ -911,44 +911,44 @@ if [ "$SKIP_ONBOARD" = false ] && [ "$DRY_RUN" != true ] && [ -f "$BIN" ]; then
   # Skip the prompt entirely when the operator already has a configured
   # ZeroClaw — re-installs should not re-prompt.
   if ! onboarding_needed; then
-    info "Existing ZeroClaw config detected at $PREFIX/.zeroclaw/config.toml — skipping onboard prompt."
-    info "Run 'zeroclaw onboard' to reconfigure."
+    info "Existing OpenZ config detected at $PREFIX/.openz/config.toml — skipping onboard prompt."
+    info "Run 'openz onboard' to reconfigure."
   elif [ -t 0 ]; then
     # 3-way onboarding choice. Bare Enter accepts the [1] CLI default;
     # option [2] foregrounds the daemon so the operator can finish in the
     # browser and Ctrl+C to return; [3] skips and prints a follow-up hint.
     # Non-TTY runs fall through to the silent skip in the else branch.
     echo
-    printf "%s\n" "$(bold "ZeroClaw installed. How would you like to complete onboarding?")"
-    printf "  [1] CLI/TUI  (zeroclaw onboard)\n"
-    printf "  [2] Open gateway in browser (zeroclaw daemon + dashboard)\n"
+    printf "%s\n" "$(bold "OpenZ installed. How would you like to complete onboarding?")"
+    printf "  [1] CLI/TUI  (openz onboard)\n"
+    printf "  [2] Open gateway in browser (openz daemon + dashboard)\n"
     printf "  [3] Skip for now\n"
     printf "  Choice [1-3, default 1]: "
     read -r onboard_choice
     case "${onboard_choice:-1}" in
       1|"")
         echo
-        "$BIN" onboard || warn "Onboard wizard exited with an error — run 'zeroclaw onboard' manually"
+        "$BIN" onboard || warn "Onboard wizard exited with an error — run 'openz onboard' manually"
         ;;
       2)
         echo
         info "Starting gateway daemon for browser-based onboarding..."
         info "Open the dashboard in your browser; pair with the code shown in logs."
-        info "Stop the daemon with Ctrl+C when done; then run 'zeroclaw service install' for always-on."
-        "$BIN" daemon || warn "Daemon exited with an error — run 'zeroclaw daemon' manually"
+        info "Stop the daemon with Ctrl+C when done; then run 'openz service install' for always-on."
+        "$BIN" daemon || warn "Daemon exited with an error — run 'openz daemon' manually"
         ;;
       3)
-        info "Skipped onboarding. Run 'zeroclaw onboard' (CLI) or 'zeroclaw daemon' (browser) when ready."
+        info "Skipped onboarding. Run 'openz onboard' (CLI) or 'openz daemon' (browser) when ready."
         ;;
       *)
-        warn "Unknown choice '$onboard_choice' — skipping. Run 'zeroclaw onboard' to configure."
+        warn "Unknown choice '$onboard_choice' — skipping. Run 'openz onboard' to configure."
         ;;
     esac
   else
-    info "Non-interactive — skipping onboard prompt. Run 'zeroclaw onboard' to configure."
+    info "Non-interactive — skipping onboard prompt. Run 'openz onboard' to configure."
   fi
 fi
 
 echo
-info "Done. Run $(bold "zeroclaw agent") to start chatting."
+info "Done. Run $(bold "openz agent") to start chatting."
 echo

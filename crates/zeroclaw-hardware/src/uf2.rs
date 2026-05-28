@@ -72,11 +72,19 @@ pub fn ensure_firmware_dir() -> Result<PathBuf> {
         anyhow::Error::msg("cannot determine home directory")
     })?;
 
-    let firmware_dir = base
+    let openz_fw = base.home_dir().join(".openz").join("firmware").join("pico");
+    let zeroclaw_fw = base
         .home_dir()
         .join(".zeroclaw")
         .join("firmware")
         .join("pico");
+    let firmware_dir = if openz_fw.exists() {
+        openz_fw
+    } else if zeroclaw_fw.exists() {
+        zeroclaw_fw
+    } else {
+        openz_fw
+    };
     std::fs::create_dir_all(&firmware_dir)?;
 
     // UF2 — validate magic before writing so a broken stub is caught early.

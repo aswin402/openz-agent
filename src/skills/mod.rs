@@ -35,12 +35,12 @@ pub async fn handle_command(
             if skills.is_empty() {
                 println!("No skills installed.");
                 println!();
-                println!("  Create one: mkdir -p ~/.zeroclaw/workspace/skills/my-skill");
+                println!("  Create one: mkdir -p ~/.openz/workspace/skills/my-skill");
                 println!(
-                    "              echo '# My Skill' > ~/.zeroclaw/workspace/skills/my-skill/SKILL.md"
+                    "              echo '# My Skill' > ~/.openz/workspace/skills/my-skill/SKILL.md"
                 );
                 println!();
-                println!("  Or install: zeroclaw skills install <source>");
+                println!("  Or install: openz skills install <source>");
             } else {
                 println!("Installed skills ({}):", skills.len());
                 println!();

@@ -67,9 +67,25 @@ impl RuntimeAdapter for DockerRuntime {
 
     fn storage_path(&self) -> PathBuf {
         if self.config.mount_workspace {
-            PathBuf::from("/workspace/.zeroclaw")
+            let openz = PathBuf::from("/workspace/.openz");
+            let zeroclaw = PathBuf::from("/workspace/.zeroclaw");
+            if openz.exists() {
+                openz
+            } else if zeroclaw.exists() {
+                zeroclaw
+            } else {
+                openz
+            }
         } else {
-            PathBuf::from("/tmp/.zeroclaw")
+            let openz = PathBuf::from("/tmp/.openz");
+            let zeroclaw = PathBuf::from("/tmp/.zeroclaw");
+            if openz.exists() {
+                openz
+            } else if zeroclaw.exists() {
+                zeroclaw
+            } else {
+                openz
+            }
         }
     }
 

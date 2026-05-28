@@ -290,9 +290,27 @@ impl RuntimeAdapter for WasmRuntime {
     }
 
     fn storage_path(&self) -> PathBuf {
-        self.workspace_dir
-            .as_ref()
-            .map_or_else(|| PathBuf::from(".zeroclaw"), |w| w.join(".zeroclaw"))
+        if let Some(ref w) = self.workspace_dir {
+            let openz = w.join(".openz");
+            let zeroclaw = w.join(".zeroclaw");
+            if openz.exists() {
+                openz
+            } else if zeroclaw.exists() {
+                zeroclaw
+            } else {
+                openz
+            }
+        } else {
+            let openz = PathBuf::from(".openz");
+            let zeroclaw = PathBuf::from(".zeroclaw");
+            if openz.exists() {
+                openz
+            } else if zeroclaw.exists() {
+                zeroclaw
+            } else {
+                openz
+            }
+        }
     }
 
     fn supports_long_running(&self) -> bool {
@@ -385,13 +403,16 @@ mod tests {
     #[test]
     fn wasm_storage_path_default() {
         let rt = WasmRuntime::new(default_config());
-        assert!(rt.storage_path().to_string_lossy().contains("zeroclaw"));
+        let path = rt.storage_path();
+        let s = path.to_string_lossy();
+        assert!(s.contains("openz") || s.contains("zeroclaw"));
     }
 
     #[test]
     fn wasm_storage_path_with_workspace() {
         let rt = WasmRuntime::with_workspace(default_config(), PathBuf::from("/home/user/project"));
-        assert_eq!(rt.storage_path(), PathBuf::from("/home/user/project/.zeroclaw"));
+        let path = rt.storage_path();
+        assert!(path == PathBuf::from("/home/user/project/.openz") || path == PathBuf::from("/home/user/project/.zeroclaw"));
     }
 
     // ── Config validation ──────────────────────────────────────

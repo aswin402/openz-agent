@@ -28,10 +28,28 @@ impl RuntimeAdapter for SshRuntime {
     }
 
     fn storage_path(&self) -> PathBuf {
-        directories::UserDirs::new().map_or_else(
-            || PathBuf::from(".zeroclaw"),
-            |u| u.home_dir().join(".zeroclaw"),
-        )
+        let home = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf());
+        if let Some(h) = home {
+            let openz = h.join(".openz");
+            let zeroclaw = h.join(".zeroclaw");
+            if openz.exists() {
+                openz
+            } else if zeroclaw.exists() {
+                zeroclaw
+            } else {
+                openz
+            }
+        } else {
+            let openz = PathBuf::from(".openz");
+            let zeroclaw = PathBuf::from(".zeroclaw");
+            if openz.exists() {
+                openz
+            } else if zeroclaw.exists() {
+                zeroclaw
+            } else {
+                openz
+            }
+        }
     }
 
     fn supports_long_running(&self) -> bool {

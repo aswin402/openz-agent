@@ -336,9 +336,20 @@ impl CostTracker {
 
 fn resolve_storage_path(workspace_dir: &Path) -> Result<PathBuf> {
     let storage_path = workspace_dir.join("state").join("costs.jsonl");
-    let legacy_path = workspace_dir.join(".zeroclaw").join("costs.db");
+    let legacy_path = workspace_dir.join(".openz").join("costs.db");
+    let legacy_path_zeroclaw = workspace_dir.join(".zeroclaw").join("costs.db");
 
-    if !storage_path.exists() && legacy_path.exists() {
+    let legacy_db = if legacy_path.exists() {
+        Some(legacy_path)
+    } else if legacy_path_zeroclaw.exists() {
+        Some(legacy_path_zeroclaw)
+    } else {
+        None
+    };
+
+    if !storage_path.exists()
+        && let Some(ref db) = legacy_db
+    {
         if let Some(parent) = storage_path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!(
@@ -348,21 +359,21 @@ fn resolve_storage_path(workspace_dir: &Path) -> Result<PathBuf> {
             })?;
         }
 
-        if let Err(error) = fs::rename(&legacy_path, &storage_path) {
+        if let Err(error) = fs::rename(db, &storage_path) {
             ::zeroclaw_log::record!(
                 WARN,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
                     .with_outcome(::zeroclaw_log::EventOutcome::Unknown),
                 &format!(
                     "Failed to move legacy cost storage from {} to {}: {error}; falling back to copy",
-                    legacy_path.display().to_string(),
+                    db.display().to_string(),
                     storage_path.display().to_string()
                 )
             );
-            fs::copy(&legacy_path, &storage_path).with_context(|| {
+            fs::copy(db, &storage_path).with_context(|| {
                 format!(
                     "Failed to copy legacy cost storage from {} to {}",
-                    legacy_path.display().to_string(),
+                    db.display().to_string(),
                     storage_path.display()
                 )
             })?;

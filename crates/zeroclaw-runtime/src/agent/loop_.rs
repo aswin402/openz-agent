@@ -100,6 +100,146 @@ pub use super::history::{
     truncate_tool_result,
 };
 
+pub fn format_agent_text(text: &str) -> String {
+    let mut formatted_lines = Vec::new();
+
+    for line in text.lines() {
+        let mut formatted_line = line.to_string();
+
+        // 1. Markdown bold -> orange
+        static DOUBLE_AST: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
+        formatted_line = DOUBLE_AST
+            .replace_all(
+                &formatted_line,
+                "\x1B[38;2;249;115;22m$1\x1B[38;2;228;228;231m",
+            )
+            .into_owned();
+
+        // 2. Backticks -> orange
+        static BACKTICKS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap());
+        formatted_line = BACKTICKS
+            .replace_all(
+                &formatted_line,
+                "\x1B[38;2;249;115;22m$1\x1B[38;2;228;228;231m",
+            )
+            .into_owned();
+
+        // 3. Double quotes -> quotes in orange content
+        static DOUBLE_QUOTES: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r#""([^"]+)""#).unwrap());
+        formatted_line = DOUBLE_QUOTES
+            .replace_all(
+                &formatted_line,
+                "\"\x1B[38;2;249;115;22m$1\x1B[38;2;228;228;231m\"",
+            )
+            .into_owned();
+
+        // 4. Danger words -> red
+        static DANGER_WORDS: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(
+                r"(?i)\b(danger|error|failed|critical|fatal|unsafe|banned|forbidden|violation)\b",
+            )
+            .unwrap()
+        });
+        formatted_line = DANGER_WORDS
+            .replace_all(
+                &formatted_line,
+                "\x1B[38;2;239;68;68m$0\x1B[38;2;228;228;231m",
+            )
+            .into_owned();
+
+        // 5. Warning words -> orange
+        static WARN_WORDS: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?i)\b(warning|caution|careful|beware)\b").unwrap());
+        formatted_line = WARN_WORDS
+            .replace_all(
+                &formatted_line,
+                "\x1B[38;2;249;115;22m$0\x1B[38;2;228;228;231m",
+            )
+            .into_owned();
+
+        // 6. Reminder/useful words -> emerald
+        static REMINDER_WORDS: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"(?i)\b(reminder|tip|helpful|useful|remember|don't forget|make sure|ensure|always)\b").unwrap()
+        });
+        formatted_line = REMINDER_WORDS
+            .replace_all(
+                &formatted_line,
+                "\x1B[38;2;16;185;129m$0\x1B[38;2;228;228;231m",
+            )
+            .into_owned();
+
+        // 7. Questions -> bold the whole sentence ending with '?'
+        static QUESTION_SENTENCE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(^|[\.!\?]\s+)([^.!\?]*\?)").unwrap());
+        formatted_line = QUESTION_SENTENCE
+            .replace_all(&formatted_line, "$1\x1B[1m$2\x1B[22m")
+            .into_owned();
+
+        formatted_lines.push(formatted_line);
+    }
+
+    formatted_lines.join("\n")
+}
+
+struct StreamFormatter {
+    line_buffer: String,
+}
+
+impl StreamFormatter {
+    fn new() -> Self {
+        Self {
+            line_buffer: String::new(),
+        }
+    }
+
+    fn write_text(&mut self, text: &str) {
+        let parts = text.split('\n').collect::<Vec<&str>>();
+        if parts.is_empty() {
+            return;
+        }
+
+        if !self.line_buffer.is_empty() {
+            print!("\r\x1B[K");
+        }
+
+        if parts.len() > 1 {
+            let completed = format!("{}{}", self.line_buffer, parts[0]);
+            let styled = format_agent_text(&completed);
+            print!("\x1B[38;2;228;228;231m{}\x1B[0m\r\n", styled);
+
+            for part in parts.iter().take(parts.len() - 1).skip(1) {
+                let styled = format_agent_text(part);
+                print!("\x1B[38;2;228;228;231m{}\x1B[0m\r\n", styled);
+            }
+
+            self.line_buffer = parts.last().unwrap().to_string();
+            if !self.line_buffer.is_empty() {
+                let styled = format_agent_text(&self.line_buffer);
+                print!("\x1B[38;2;228;228;231m{}\x1B[0m", styled);
+            }
+        } else {
+            self.line_buffer.push_str(parts[0]);
+            if !self.line_buffer.is_empty() {
+                let styled = format_agent_text(&self.line_buffer);
+                print!("\x1B[38;2;228;228;231m{}\x1B[0m", styled);
+            }
+        }
+        let _ = std::io::stdout().flush();
+    }
+
+    fn flush(&mut self) {
+        if !self.line_buffer.is_empty() {
+            print!("\r\x1B[K");
+            let styled = format_agent_text(&self.line_buffer);
+            print!("\x1B[38;2;228;228;231m{}\x1B[0m", styled);
+            self.line_buffer.clear();
+            let _ = std::io::stdout().flush();
+        }
+    }
+}
+
 /// Minimum user-message length (in chars) for auto-save to memory.
 /// Matches the channel-side constant in `channels/mod.rs`.
 const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
@@ -2231,7 +2371,8 @@ pub async fn run_tool_call_loop(
                 let _ = tx.send(StreamDelta::Text(narration)).await;
             }
             if !silent {
-                print!("\x1B[38;2;228;228;231m{display_text}\x1B[0m");
+                let styled = format_agent_text(&display_text);
+                print!("\x1B[38;2;228;228;231m{styled}\x1B[0m");
                 let _ = std::io::stdout().flush();
             }
         }
@@ -3982,6 +4123,54 @@ pub async fn run(
                 vec![ChatMessage::system(&system_prompt)]
             };
 
+            // Print loaded history at session start
+            if !history.is_empty() {
+                for msg in &history {
+                    if msg.role == "user" {
+                        // Skip system-level tool results or error reports
+                        if !msg.content.starts_with("[Tool results]")
+                            && !msg.content.starts_with("[Tool call parse error]")
+                        {
+                            let mut content = msg.content.as_str();
+                            if content.starts_with('[') {
+                                if let Some(end_bracket) = content.find(']') {
+                                    if end_bracket + 1 < content.len() {
+                                        content = content[end_bracket + 1..].trim();
+                                    }
+                                }
+                            }
+                            let lines: Vec<&str> = content.split('\n').collect();
+                            if lines.len() > 1 {
+                                println!("\x1B[1m\x1B[38;2;129;140;248m╭─\x1B[0m");
+                                for line in &lines {
+                                    println!("\x1B[1m\x1B[38;2;129;140;248m│ {}\x1B[0m", line);
+                                }
+                                println!("\x1B[1m\x1B[38;2;129;140;248m╰─\x1B[0m");
+                            } else {
+                                println!(
+                                    "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
+                                );
+                                println!(
+                                    "\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m",
+                                    content
+                                );
+                                println!(
+                                    "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
+                                );
+                            }
+                        }
+                    } else if msg.role == "assistant" {
+                        if !msg.content.is_empty() {
+                            let styled = format_agent_text(&msg.content);
+                            println!("\x1B[38;2;228;228;231m{}\x1B[0m", styled);
+                            println!(
+                                "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m\n"
+                            );
+                        }
+                    }
+                }
+            }
+
             let run_fallback = true;
 
             if run_fallback {
@@ -4042,6 +4231,7 @@ pub async fn run(
                         .unwrap_or(false);
                     let input = if is_tui_active {
                         let mut input_buf = String::new();
+                        let mut cursor_pos = 0;
                         let mut is_eof = false;
                         let commands = vec![
                             "/help",
@@ -4059,11 +4249,11 @@ pub async fn run(
                         ];
 
                         if crossterm::terminal::enable_raw_mode().is_ok() {
+                            let _ = crossterm::execute!(
+                                std::io::stdout(),
+                                crossterm::event::EnableBracketedPaste
+                            );
                             let mut prev_lines_drawn = 1;
-
-                            // Initially draw the clean empty prompt
-                            print!("\x1B[38;2;139;92;246m>\x1B[0m ");
-                            let _ = std::io::stdout().flush();
 
                             loop {
                                 // 1. Determine autocomplete suggestion ghost text
@@ -4093,25 +4283,66 @@ pub async fn run(
                                     print!("╰─ {}", console::style(ghost_text).dim());
                                     lines.len() + 2
                                 } else {
+                                    println!(
+                                        "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
+                                    );
+                                    print!("\r\x1B[K");
                                     print!(
                                         "\x1B[38;2;139;92;246m>\x1B[0m {}{}",
                                         input_buf,
                                         console::style(ghost_text).dim()
                                     );
-                                    1
+                                    println!();
+                                    print!("\r\x1B[K");
+                                    print!(
+                                        "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
+                                    );
+                                    3
                                 };
                                 let _ = std::io::stdout().flush();
 
-                                // Move cursor left back over the ghost text
-                                if !ghost_text.is_empty() {
-                                    print!("\x1B[{}D", ghost_text.len());
-                                    let _ = std::io::stdout().flush();
+                                // 2.5. Position cursor at cursor_pos
+                                let mut target_line_idx = 0;
+                                let mut target_col_idx = 0;
+                                let mut temp_line = 0;
+                                let mut temp_col = 0;
+                                for (idx, c) in input_buf.chars().enumerate() {
+                                    if idx == cursor_pos {
+                                        target_line_idx = temp_line;
+                                        target_col_idx = temp_col;
+                                    }
+                                    if c == '\n' {
+                                        temp_line += 1;
+                                        temp_col = 0;
+                                    } else {
+                                        temp_col += 1;
+                                    }
                                 }
+                                if cursor_pos == input_buf.chars().count() {
+                                    target_line_idx = temp_line;
+                                    target_col_idx = temp_col;
+                                }
+
+                                let up_count =
+                                    (current_lines_drawn - 1).saturating_sub(1 + target_line_idx);
+                                if up_count > 0 {
+                                    print!("\x1B[{}A", up_count);
+                                }
+                                print!("\x1B[{}G", 3 + target_col_idx);
+                                let _ = std::io::stdout().flush();
 
                                 prev_lines_drawn = current_lines_drawn;
 
                                 // 3. Read and process key events
                                 match crossterm::event::read() {
+                                    Ok(crossterm::event::Event::Paste(text)) => {
+                                        let mut chars: Vec<char> = input_buf.chars().collect();
+                                        for (i, c) in text.chars().enumerate() {
+                                            chars.insert(cursor_pos + i, c);
+                                        }
+                                        cursor_pos += text.chars().count();
+                                        input_buf = chars.into_iter().collect();
+                                    }
                                     Ok(crossterm::event::Event::Key(key_event)) => {
                                         if key_event.kind == crossterm::event::KeyEventKind::Press {
                                             match key_event.code {
@@ -4120,13 +4351,65 @@ pub async fn run(
                                                     if key_event.modifiers.contains(
                                                         crossterm::event::KeyModifiers::ALT,
                                                     ) {
-                                                        input_buf.push('\n');
+                                                        let mut chars: Vec<char> =
+                                                            input_buf.chars().collect();
+                                                        chars.insert(cursor_pos, '\n');
+                                                        input_buf = chars.into_iter().collect();
+                                                        cursor_pos += 1;
                                                     } else {
-                                                        // Finalize: move cursor right past the ghost text if any
-                                                        if !ghost_text.is_empty() {
-                                                            print!("\x1B[{}C", ghost_text.len());
+                                                        // Finalize: move cursor to the end line and print the completed prompt styled
+                                                        // Erase the lines drawn first
+                                                        if prev_lines_drawn > 1 {
+                                                            print!(
+                                                                "\x1B[{}A",
+                                                                prev_lines_drawn - 1
+                                                            );
                                                         }
-                                                        println!();
+                                                        for idx in 0..prev_lines_drawn {
+                                                            print!("\r\x1B[K");
+                                                            if idx < prev_lines_drawn - 1 {
+                                                                print!("\n");
+                                                            }
+                                                        }
+                                                        if prev_lines_drawn > 1 {
+                                                            print!(
+                                                                "\x1B[{}A",
+                                                                prev_lines_drawn - 1
+                                                            );
+                                                        }
+
+                                                        if lines.len() > 1 {
+                                                            println!(
+                                                                "\x1B[1m\x1B[38;2;129;140;248m╭─\x1B[0m"
+                                                            );
+                                                            for line in &lines {
+                                                                println!(
+                                                                    "\x1B[1m\x1B[38;2;129;140;248m│ {}\x1B[0m",
+                                                                    line
+                                                                );
+                                                            }
+                                                            println!(
+                                                                "\x1B[1m\x1B[38;2;129;140;248m╰─\x1B[0m"
+                                                            );
+                                                        } else {
+                                                            println!(
+                                                                "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
+                                                            );
+
+                                                            println!(
+                                                                "\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m",
+                                                                input_buf
+                                                            );
+
+                                                            println!(
+                                                                "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
+                                                            );
+                                                        }
+
+                                                        let _ = crossterm::execute!(
+                                                            std::io::stdout(),
+                                                            crossterm::event::DisableBracketedPaste
+                                                        );
                                                         let _ =
                                                             crossterm::terminal::disable_raw_mode();
                                                         break;
@@ -4135,6 +4418,7 @@ pub async fn run(
                                                 crossterm::event::KeyCode::Tab => {
                                                     if !ghost_text.is_empty() {
                                                         input_buf.push_str(ghost_text);
+                                                        cursor_pos = input_buf.chars().count();
                                                     }
                                                 }
                                                 crossterm::event::KeyCode::Char('c')
@@ -4142,7 +4426,12 @@ pub async fn run(
                                                         crossterm::event::KeyModifiers::CONTROL,
                                                     ) =>
                                                 {
+                                                    let _ = crossterm::execute!(
+                                                        std::io::stdout(),
+                                                        crossterm::event::DisableBracketedPaste
+                                                    );
                                                     let _ = crossterm::terminal::disable_raw_mode();
+                                                    println!("ok byee....");
                                                     std::process::exit(130);
                                                 }
                                                 crossterm::event::KeyCode::Char('d')
@@ -4151,21 +4440,122 @@ pub async fn run(
                                                     ) =>
                                                 {
                                                     if input_buf.is_empty() {
+                                                        let _ = crossterm::execute!(
+                                                            std::io::stdout(),
+                                                            crossterm::event::DisableBracketedPaste
+                                                        );
                                                         let _ =
                                                             crossterm::terminal::disable_raw_mode();
                                                         is_eof = true;
                                                         break;
                                                     }
                                                 }
-                                                crossterm::event::KeyCode::Char(c) => {
-                                                    input_buf.push(c);
+                                                // Left/Right arrow cursor movement
+                                                crossterm::event::KeyCode::Left => {
+                                                    cursor_pos = cursor_pos.saturating_sub(1);
                                                 }
-                                                crossterm::event::KeyCode::Backspace => {
-                                                    input_buf.pop();
+                                                crossterm::event::KeyCode::Char('b')
+                                                    if key_event.modifiers.contains(
+                                                        crossterm::event::KeyModifiers::CONTROL,
+                                                    ) =>
+                                                {
+                                                    cursor_pos = cursor_pos.saturating_sub(1);
+                                                }
+                                                crossterm::event::KeyCode::Right => {
+                                                    if cursor_pos < input_buf.chars().count() {
+                                                        cursor_pos += 1;
+                                                    }
+                                                }
+                                                crossterm::event::KeyCode::Char('f')
+                                                    if key_event.modifiers.contains(
+                                                        crossterm::event::KeyModifiers::CONTROL,
+                                                    ) =>
+                                                {
+                                                    if cursor_pos < input_buf.chars().count() {
+                                                        cursor_pos += 1;
+                                                    }
+                                                }
+                                                crossterm::event::KeyCode::Home => {
+                                                    cursor_pos = 0;
+                                                }
+                                                crossterm::event::KeyCode::Char('a')
+                                                    if key_event.modifiers.contains(
+                                                        crossterm::event::KeyModifiers::CONTROL,
+                                                    ) =>
+                                                {
+                                                    cursor_pos = 0;
+                                                }
+                                                crossterm::event::KeyCode::End => {
+                                                    cursor_pos = input_buf.chars().count();
+                                                }
+                                                crossterm::event::KeyCode::Char('e')
+                                                    if key_event.modifiers.contains(
+                                                        crossterm::event::KeyModifiers::CONTROL,
+                                                    ) =>
+                                                {
+                                                    cursor_pos = input_buf.chars().count();
+                                                }
+                                                // Backspace / Delete character
+                                                crossterm::event::KeyCode::Backspace
+                                                | crossterm::event::KeyCode::Char('\u{7f}')
+                                                | crossterm::event::KeyCode::Char('\u{8}') => {
+                                                    if cursor_pos > 0 {
+                                                        let mut chars: Vec<char> =
+                                                            input_buf.chars().collect();
+                                                        chars.remove(cursor_pos - 1);
+                                                        input_buf = chars.into_iter().collect();
+                                                        cursor_pos = cursor_pos.saturating_sub(1);
+                                                    }
+                                                }
+                                                crossterm::event::KeyCode::Delete => {
+                                                    let chars_count = input_buf.chars().count();
+                                                    if cursor_pos < chars_count {
+                                                        let mut chars: Vec<char> =
+                                                            input_buf.chars().collect();
+                                                        chars.remove(cursor_pos);
+                                                        input_buf = chars.into_iter().collect();
+                                                    }
+                                                }
+                                                // Delete word (Ctrl+W)
+                                                crossterm::event::KeyCode::Char('w')
+                                                    if key_event.modifiers.contains(
+                                                        crossterm::event::KeyModifiers::CONTROL,
+                                                    ) =>
+                                                {
+                                                    if cursor_pos > 0 {
+                                                        let chars: Vec<char> =
+                                                            input_buf.chars().collect();
+                                                        let mut i = cursor_pos;
+                                                        while i > 0 && chars[i - 1].is_whitespace()
+                                                        {
+                                                            i -= 1;
+                                                        }
+                                                        while i > 0 && !chars[i - 1].is_whitespace()
+                                                        {
+                                                            i -= 1;
+                                                        }
+                                                        let mut new_chars = chars[0..i].to_vec();
+                                                        new_chars.extend_from_slice(
+                                                            &chars[cursor_pos..],
+                                                        );
+                                                        cursor_pos = i;
+                                                        input_buf = new_chars.into_iter().collect();
+                                                    }
+                                                }
+                                                crossterm::event::KeyCode::Char(c) => {
+                                                    let mut chars: Vec<char> =
+                                                        input_buf.chars().collect();
+                                                    let chars_len = chars.len();
+                                                    if cursor_pos > chars_len {
+                                                        cursor_pos = chars_len;
+                                                    }
+                                                    chars.insert(cursor_pos, c);
+                                                    input_buf = chars.into_iter().collect();
+                                                    cursor_pos += 1;
                                                 }
                                                 crossterm::event::KeyCode::Esc => {
                                                     input_buf.clear();
-                                                    // Erase previously drawn lines
+                                                    cursor_pos = 0;
                                                     if prev_lines_drawn > 1 {
                                                         print!("\x1B[{}A", prev_lines_drawn - 1);
                                                     }
@@ -4880,6 +5270,7 @@ pub async fn run(
                         let mut in_think = false;
                         let mut pending_buffer = String::new();
                         let mut has_printed_anything = false;
+                        let mut formatter = StreamFormatter::new();
 
                         let mut last_running_tool = String::new();
                         let mut last_running_hint = String::new();
@@ -5074,9 +5465,7 @@ pub async fn run(
                                                     }
                                                 }
                                                 if !prefix.is_empty() {
-                                                    let output = prefix.replace("\n", "\r\n");
-                                                    print!("\x1B[38;2;228;228;231m{output}\x1B[0m");
-                                                    let _ = std::io::stdout().flush();
+                                                    formatter.write_text(&prefix);
                                                 }
                                                 pending_buffer.drain(..7);
                                                 in_think = true;
@@ -5093,11 +5482,7 @@ pub async fn run(
                                                         }
                                                     }
                                                     if !prefix.is_empty() {
-                                                        let output = prefix.replace("\n", "\r\n");
-                                                        print!(
-                                                            "\x1B[38;2;228;228;231m{output}\x1B[0m"
-                                                        );
-                                                        let _ = std::io::stdout().flush();
+                                                        formatter.write_text(&prefix);
                                                     }
                                                 }
                                                 break;
@@ -5113,13 +5498,10 @@ pub async fn run(
                                 final_text = final_text.trim_start().to_string();
                             }
                             if !final_text.is_empty() {
-                                print!(
-                                    "\x1B[38;2;228;228;231m{}\x1B[0m",
-                                    final_text.replace("\n", "\r\n")
-                                );
-                                let _ = std::io::stdout().flush();
+                                formatter.write_text(&final_text);
                             }
                         }
+                        formatter.flush();
                     });
 
                     // Spawn a key listener task to detect Ctrl+C and Esc keypresses while the model runs.
@@ -5158,6 +5540,7 @@ pub async fn run(
                                                 .contains(crossterm::event::KeyModifiers::CONTROL)
                                         {
                                             let _ = crossterm::terminal::disable_raw_mode();
+                                            println!("ok byee....");
                                             std::process::exit(130);
                                         }
                                     }
@@ -5531,7 +5914,14 @@ After the code block, write a brief explanation (one line) of the improvement st
                     if let Some(path) = session_state_file.as_deref() {
                         save_interactive_session_history(path, &history)?;
                     }
+
+                    if is_tui_active {
+                        println!(
+                            "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m\n"
+                        );
+                    }
                 }
+                println!("ok byee....");
             }
         }
 

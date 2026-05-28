@@ -37,6 +37,10 @@ struct Cli {
     #[arg(short = 'V', long)]
     version: bool,
 
+    /// Specify the agent alias to run (e.g. brain, planner, analysis, vision)
+    #[arg(short, long)]
+    agent: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -133,14 +137,44 @@ async fn main() -> Result<()> {
     }));
 
     // Find configured agent alias or run configure
-    let agent_alias = if config.agents.contains_key("assistant") {
-        "assistant".to_string()
-    } else if let Some(first_alias) = config.agents.keys().next() {
-        first_alias.clone()
-    } else {
+    let agent_alias = if let Some(ref targeted) = cli.agent {
+        if config.agents.contains_key(targeted) {
+            targeted.clone()
+        } else {
+            let mut available: Vec<_> = config.agents.keys().cloned().collect();
+            available.sort();
+            eprintln!(
+                "{}",
+                console::style(format!("Error: Agent '{}' is not configured.", targeted))
+                    .red()
+                    .bold()
+            );
+            eprintln!("Available agents: {}", available.join(", "));
+            std::process::exit(1);
+        }
+    } else if config.agents.is_empty() {
         println!("No agent configured yet. Let's run configuration first!");
         run_configure_wizard(&mut config).await?;
         "assistant".to_string()
+    } else if config.agents.len() == 1 {
+        config.agents.keys().next().unwrap().clone()
+    } else {
+        // If there are multiple agents, we prompt the user to choose
+        let mut agents: Vec<_> = config.agents.keys().cloned().collect();
+        agents.sort();
+
+        let mut theme = dialoguer::theme::ColorfulTheme::default();
+        let purple = console::Style::new().color256(99).bold();
+        theme.active_item_style = purple;
+        theme.prompt_style = console::Style::new().bold();
+
+        let selection = dialoguer::Select::with_theme(&theme)
+            .with_prompt("Select an agent to run")
+            .items(&agents)
+            .default(0)
+            .interact()?;
+
+        agents[selection].clone()
     };
 
     let final_temperature: Option<f64> = config
@@ -512,6 +546,9 @@ fn list_sessions() -> Vec<SessionFile> {
         get_sessions_dir(),
         // Fallback
         directories::BaseDirs::new()
+            .map(|bd| bd.home_dir().join(".openz").join("sessions"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".openz/sessions")),
+        directories::BaseDirs::new()
             .map(|bd| bd.home_dir().join(".zeroclaw").join("sessions"))
             .unwrap_or_else(|| std::path::PathBuf::from(".zeroclaw/sessions")),
     ];
@@ -827,6 +864,7 @@ fn interactive_session_picker(
                             let _ = stdout.write_all(b"\x1B[?25h");
                             let _ = stdout.flush();
                             let _ = disable_raw_mode();
+                            println!("ok byee....");
                             std::process::exit(130);
                         }
                         KeyCode::Esc => {

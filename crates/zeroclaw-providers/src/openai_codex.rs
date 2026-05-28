@@ -120,7 +120,7 @@ impl OpenAiCodexModelProvider {
         let state_dir = options
             .zeroclaw_dir
             .clone()
-            .unwrap_or_else(default_zeroclaw_dir);
+            .unwrap_or_else(default_openz_dir);
         let auth = AuthService::new(&state_dir, options.secrets_encrypt);
         let responses_url = resolve_responses_url(options)?;
 
@@ -141,11 +141,29 @@ impl OpenAiCodexModelProvider {
     }
 }
 
-fn default_zeroclaw_dir() -> PathBuf {
-    directories::UserDirs::new().map_or_else(
-        || PathBuf::from(".zeroclaw"),
-        |dirs| dirs.home_dir().join(".zeroclaw"),
-    )
+fn default_openz_dir() -> PathBuf {
+    let home = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf());
+    if let Some(h) = home {
+        let openz = h.join(".openz");
+        let zeroclaw = h.join(".zeroclaw");
+        if openz.exists() {
+            openz
+        } else if zeroclaw.exists() {
+            zeroclaw
+        } else {
+            openz
+        }
+    } else {
+        let openz = PathBuf::from(".openz");
+        let zeroclaw = PathBuf::from(".zeroclaw");
+        if openz.exists() {
+            openz
+        } else if zeroclaw.exists() {
+            zeroclaw
+        } else {
+            openz
+        }
+    }
 }
 
 fn build_responses_url(base_or_endpoint: &str) -> anyhow::Result<String> {
@@ -1612,7 +1630,7 @@ mod tests {
 
     #[test]
     fn default_state_dir_is_non_empty() {
-        let path = default_zeroclaw_dir();
+        let path = default_openz_dir();
         assert!(!path.as_os_str().is_empty());
     }
 
