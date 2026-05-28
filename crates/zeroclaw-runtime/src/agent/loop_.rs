@@ -3132,6 +3132,41 @@ pub fn apply_text_tool_prompt_policy(
     expose_text_tool_protocol
 }
 
+fn get_model_max_context(model_name: &str) -> Option<usize> {
+    let name = model_name.to_lowercase();
+    if name.contains("gpt-4o-mini")
+        || name.contains("gpt-4o")
+        || name.contains("gpt-4-turbo")
+        || name.contains("llama-3.1")
+        || name.contains("llama-3.2")
+        || name.contains("llama-3.3")
+        || name.contains("minimax-m2.7")
+        || name.contains("m2.7")
+    {
+        Some(128_000)
+    } else if name.contains("gpt-4") || name.contains("llama-3-") || name.contains("llama3-") {
+        Some(8_192)
+    } else if name.contains("gpt-3.5-turbo") {
+        Some(16_385)
+    } else if name.contains("o1-")
+        || name.starts_with("o1")
+        || name.contains("o3-mini")
+        || name.contains("claude-3-5")
+        || name.contains("claude-3.5")
+        || name.contains("claude-3")
+    {
+        Some(200_000)
+    } else if name.contains("gemini-1.5-pro") || name.contains("gemini-2.0") {
+        Some(2_097_152)
+    } else if name.contains("gemini-1.5-flash") || name.contains("gemini-") {
+        Some(1_048_576)
+    } else if name.contains("deepseek-") {
+        Some(64_000)
+    } else {
+        None
+    }
+}
+
 // ── CLI Entrypoint ───────────────────────────────────────────────────────
 // Wires up all subsystems (observer, runtime, security, memory, tools,
 // model_provider, hardware RAG, peripherals) and enters either single-shot or
@@ -4084,42 +4119,23 @@ pub async fn run(
             let _ = std::io::stdout().flush();
 
             println!(
-                "{}",
-                console::style("  ___  ____  _____ _   _ _____")
-                    .cyan()
-                    .bold()
+                "\x1B[1m\x1B[38;2;255;255;255m  ___  ____  _____ _   _ \x1B[38;2;249;115;22m_____\x1B[0m"
             );
             println!(
-                "{}",
-                console::style(" / _ \\|  _ \\| ____| \\ | |__  /")
-                    .cyan()
-                    .bold()
+                "\x1B[1m\x1B[38;2;255;255;255m / _ \\|  _ \\| ____| \\ | \x1B[38;2;249;115;22m|__  /\x1B[0m"
             );
             println!(
-                "{}",
-                console::style("| | | | |_) |  _| |  \\| | / / ")
-                    .cyan()
-                    .bold()
+                "\x1B[1m\x1B[38;2;255;255;255m| | | | |_) |  _| |  \\| | \x1B[38;2;249;115;22m/ / \x1B[0m"
             );
             println!(
-                "{}",
-                console::style("| |_| |  __/| |___| |\\  |/ /_ ")
-                    .cyan()
-                    .bold()
+                "\x1B[1m\x1B[38;2;255;255;255m| |_| |  __/| |___| |\\  |\x1B[38;2;249;115;22m/ /_ \x1B[0m"
             );
             println!(
-                "{}",
-                console::style(" \\___/|_|   |_____|_| \\_/____|")
-                    .cyan()
-                    .bold()
+                "\x1B[1m\x1B[38;2;255;255;255m \\___/|_|   |_____|_| \\_\x1B[38;2;249;115;22m/____|\x1B[0m"
             );
             println!();
             println!(
-                "  {}",
-                console::style(
-                    "openz - The minimal, self-improving, cutting-edge AI Agent CLI & TUI."
-                )
-                .bold()
+                "  \x1B[1m\x1B[38;2;255;255;255mopen\x1B[38;2;249;115;22mz\x1B[0m\x1B[1m - The minimal, self-improving, cutting-edge AI Agent CLI & TUI.\x1B[0m"
             );
             println!(
                 "  Type {} for commands, or start chatting!\n",
@@ -4131,7 +4147,10 @@ pub async fn run(
                 .try_with(|sender| sender.is_some())
                 .unwrap_or(false);
             if is_tui_active {
-                println!("\x1B[1m\x1B[38;2;139;92;246mopenz\x1B[0m");
+                println!(
+                    "\x1B[1m\x1B[38;2;255;255;255mopen\x1B[38;2;249;115;22mz\x1B[0m\x1B[38;2;113;113;122m v{}\x1B[0m",
+                    env!("CARGO_PKG_VERSION")
+                );
                 println!("\x1B[38;2;113;113;122mloading workspace...\x1B[0m");
 
                 let num_tools = tools_registry.len();
@@ -4337,6 +4356,7 @@ pub async fn run(
                                 let term_width =
                                     crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80)
                                         as usize;
+                                let max_ctx = get_model_max_context(&model_name).unwrap_or(agent.max_context_tokens);
                                 let info_str = if let Some(ref ctx) = cost_tracking_context {
                                     if let Ok(summary) = ctx.tracker.get_summary() {
                                         format!(
@@ -4344,18 +4364,18 @@ pub async fn run(
                                             model_name,
                                             summary.session_cost_usd,
                                             summary.total_tokens,
-                                            agent.max_context_tokens
+                                            max_ctx
                                         )
                                     } else {
                                         format!(
                                             " {} | max context: {} tokens ",
-                                            model_name, agent.max_context_tokens
+                                            model_name, max_ctx
                                         )
                                     }
                                 } else {
                                     format!(
                                         " {} | max context: {} tokens ",
-                                        model_name, agent.max_context_tokens
+                                        model_name, max_ctx
                                     )
                                 };
                                 let prefix = "___";
