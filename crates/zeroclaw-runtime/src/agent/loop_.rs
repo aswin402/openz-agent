@@ -99,6 +99,90 @@ pub use super::history::{
 /// Matches the channel-side constant in `channels/mod.rs`.
 const AUTOSAVE_MIN_MESSAGE_CHARS: usize = 20;
 
+fn pretty_tool_hint(tool_name: &str, hint: &str) -> String {
+    if hint.is_empty() {
+        return String::new();
+    }
+    if tool_name.contains("file")
+        || tool_name.contains("read")
+        || tool_name.contains("write")
+        || tool_name.contains("replace")
+        || tool_name == "grep_search"
+    {
+        let path = std::path::Path::new(hint);
+        if path.is_absolute() {
+            if let Ok(cwd) = std::env::current_dir() {
+                if let Ok(rel) = path.strip_prefix(&cwd) {
+                    return rel.display().to_string();
+                }
+            }
+            if let Some(home) = std::env::var("HOME").ok().map(std::path::PathBuf::from) {
+                if let Ok(rel) = path.strip_prefix(&home) {
+                    return format!("~/{}", rel.display());
+                }
+            }
+        }
+    }
+    hint.to_string()
+}
+
+fn summarize_tool_output(tool_name: &str, output: &str) -> Option<String> {
+    if tool_name == "shell" || tool_name == "ssh" {
+        if let Some(pos) = output.find("test result:") {
+            let line = output[pos..].split('\n').next().unwrap_or("");
+            let mut passed = None;
+            let mut failed = None;
+            for part in line.split(';') {
+                let part = part.trim();
+                if part.contains("passed") {
+                    passed = part.split_whitespace().next().map(|s| s.to_string());
+                } else if part.contains("failed") {
+                    failed = part.split_whitespace().next().map(|s| s.to_string());
+                }
+            }
+            if let Some(p) = passed {
+                if let Some(f) = failed {
+                    if f != "0" {
+                        return Some(format!("{} passed, {} failed", p, f));
+                    } else {
+                        return Some(format!("{} passed", p));
+                    }
+                }
+                return Some(format!("{} passed", p));
+            }
+        }
+        if output.contains(" passed in ") {
+            for line in output.lines().rev() {
+                if line.contains("passed") && (line.contains("===") || line.contains("failed")) {
+                    let words: Vec<&str> = line.split_whitespace().collect();
+                    if let Some(pos) = words.iter().position(|&w| w == "passed") {
+                        if pos > 0 {
+                            let count = words[pos - 1];
+                            if count.chars().all(|c| c.is_ascii_digit()) {
+                                return Some(format!("{} passed", count));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if tool_name == "grep_search" || tool_name == "search" {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(output) {
+            if let Some(arr) = json.as_array() {
+                return Some(format!("{} results", arr.len()));
+            }
+        }
+        let count = output.lines().filter(|l| l.contains("\"File\"")).count();
+        if count > 0 {
+            return Some(format!("{} results", count));
+        }
+    } else if tool_name == "view_file" || tool_name == "read" {
+        let lines = output.lines().count();
+        return Some(format!("{} lines", lines));
+    }
+    None
+}
+
 /// Callback type for checking if model has been switched during tool execution.
 /// Returns Some((model_provider, model)) if a switch was requested, None otherwise.
 pub type ModelSwitchCallback = Arc<Mutex<Option<(String, String)>>>;
@@ -2142,7 +2226,7 @@ pub async fn run_tool_call_loop(
                 let _ = tx.send(StreamDelta::Text(narration)).await;
             }
             if !silent {
-                print!("{display_text}");
+                print!("\x1B[38;2;228;228;231m{display_text}\x1B[0m");
                 let _ = std::io::stdout().flush();
             }
         }
@@ -2403,17 +2487,28 @@ pub async fn run_tool_call_loop(
             if let Some(ref tx) = on_delta {
                 let hint = {
                     let raw = match tool_name.as_str() {
-                        "shell" => tool_args.get("command").and_then(|v| v.as_str()),
-                        "file_read" | "file_write" => {
-                            tool_args.get("path").and_then(|v| v.as_str())
-                        }
+                        "shell" | "run_command" => tool_args
+                            .get("command")
+                            .or_else(|| tool_args.get("CommandLine"))
+                            .and_then(|v| v.as_str()),
+                        "file_read"
+                        | "file_write"
+                        | "view_file"
+                        | "read"
+                        | "write_to_file"
+                        | "replace_file_content"
+                        | "multi_replace_file_content" => tool_args
+                            .get("path")
+                            .or_else(|| tool_args.get("TargetFile"))
+                            .or_else(|| tool_args.get("AbsolutePath"))
+                            .and_then(|v| v.as_str()),
                         _ => tool_args
                             .get("action")
                             .and_then(|v| v.as_str())
                             .or_else(|| tool_args.get("query").and_then(|v| v.as_str())),
                     };
                     match raw {
-                        Some(s) => truncate_with_ellipsis(s, 60),
+                        Some(s) => pretty_tool_hint(&tool_name, s),
                         None => String::new(),
                     }
                 };
@@ -2500,17 +2595,23 @@ pub async fn run_tool_call_loop(
 
             // ── Progress: tool completion ───────────────────────
             if let Some(ref tx) = on_delta {
-                let secs = outcome.duration.as_secs();
+                let secs = outcome.duration.as_secs_f32();
+                let summary = summarize_tool_output(&call.name, &outcome.output);
+                let meta = if let Some(s) = summary {
+                    format!("{} | {:.1}s", s, secs)
+                } else {
+                    format!("{:.1}s", secs)
+                };
                 let progress_msg = if outcome.success {
-                    format!("\u{2705} {} ({secs}s)\n", call.name)
+                    format!("\u{2705} {} ({meta})\n", call.name)
                 } else if let Some(ref reason) = outcome.error_reason {
                     format!(
-                        "\u{274c} {} ({secs}s): {}\n",
+                        "\u{274c} {} ({meta}): {}\n",
                         call.name,
                         truncate_with_ellipsis(reason, 200)
                     )
                 } else {
-                    format!("\u{274c} {} ({secs}s)\n", call.name)
+                    format!("\u{274c} {} ({meta})\n", call.name)
                 };
                 ::zeroclaw_log::record!(
                     DEBUG,
@@ -3835,186 +3936,30 @@ pub async fn run(
                 .try_with(|sender| sender.is_some())
                 .unwrap_or(false);
             if is_tui_active {
-                let (term_w, _) = crossterm::terminal::size().unwrap_or((80, 24));
-                let header_title = "── Status Dashboard ";
-                let remaining_len = (term_w as usize).saturating_sub(header_title.chars().count());
-                let dashes = "─".repeat(remaining_len);
-                println!(
-                    "{}{}",
-                    console::style(header_title).bold(),
-                    console::style(dashes).dim()
-                );
+                println!("\x1B[1m\x1B[38;2;139;92;246mopenz\x1B[0m");
+                println!("\x1B[38;2;113;113;122mloading workspace...\x1B[0m");
 
-                let lsp_status = if which::which("rust-analyzer").is_ok() {
-                    "Active"
-                } else {
-                    "Inactive"
-                };
+                let num_tools = tools_registry.len();
+                println!("\x1B[38;2;113;113;122mconnected {} tools\x1B[0m", num_tools);
 
-                let mcp_servers: Vec<String> =
-                    config.mcp.servers.iter().map(|s| s.name.clone()).collect();
-                let mcp_str = if mcp_servers.is_empty() {
-                    "none".to_string()
-                } else {
-                    let joined = mcp_servers.join(", ");
-                    if joined.len() > 30 {
-                        let mut fit_mcp = Vec::new();
-                        let mut current_len = 0;
-                        for name in &mcp_servers {
-                            if current_len + name.len() + 2 > 25 {
-                                break;
-                            }
-                            fit_mcp.push(name.clone());
-                            current_len += name.len() + 2;
-                        }
-                        let remaining = mcp_servers.len() - fit_mcp.len();
-                        if remaining > 0 {
-                            format!("{}, ... (+{} more)", fit_mcp.join(", "), remaining)
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let pretty_cwd =
+                    if let Some(home) = std::env::var("HOME").ok().map(std::path::PathBuf::from) {
+                        if cwd == home {
+                            "~".to_string()
+                        } else if let Ok(stripped) = cwd.strip_prefix(&home) {
+                            format!("~/{}", stripped.display())
                         } else {
-                            joined
+                            cwd.display().to_string()
                         }
                     } else {
-                        joined
-                    }
-                };
-
-                let skills_str = if skills.is_empty() {
-                    "none".to_string()
-                } else {
-                    let names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
-                    let joined = names.join(", ");
-                    if joined.len() > 50 {
-                        let mut fit_names = Vec::new();
-                        let mut current_len = 0;
-                        for name in &names {
-                            if current_len + name.len() + 2 > 45 {
-                                break;
-                            }
-                            fit_names.push(name.clone());
-                            current_len += name.len() + 2;
-                        }
-                        let remaining = names.len() - fit_names.len();
-                        if remaining > 0 {
-                            format!("{}, ... (+{} more)", fit_names.join(", "), remaining)
-                        } else {
-                            joined
-                        }
-                    } else {
-                        joined
-                    }
-                };
-
-                let todos = crate::agent::tui::load_todos();
-                let checklist_status = if todos.is_empty() {
-                    "none".to_string()
-                } else {
-                    let completed = todos.iter().filter(|t| t.checked).count();
-                    let total = todos.len();
-                    format!("{}/{} tasks completed", completed, total)
-                };
-
-                let strip_ansi = |s: &str| -> String {
-                    let mut result = String::new();
-                    let mut in_esc = false;
-                    let mut in_bracket = false;
-                    for c in s.chars() {
-                        if c == '\x1b' {
-                            in_esc = true;
-                            continue;
-                        }
-                        if in_esc {
-                            if c == '[' {
-                                in_bracket = true;
-                            } else {
-                                in_esc = false;
-                                in_bracket = false;
-                            }
-                            continue;
-                        }
-                        if in_bracket {
-                            if c.is_ascii_alphabetic() {
-                                in_esc = false;
-                                in_bracket = false;
-                            }
-                            continue;
-                        }
-                        result.push(c);
-                    }
-                    result
-                };
-
-                let display_width = |s: &str| -> usize {
-                    let stripped = strip_ansi(s);
-                    stripped
-                        .chars()
-                        .map(|c| {
-                            let val = c as u32;
-                            if c.is_ascii() || val < 0x2000 { 1 } else { 2 }
-                        })
-                        .sum()
-                };
-
-                let pad_to_width = |s: &str, width: usize| -> String {
-                    let current = display_width(s);
-                    if current >= width {
-                        s.to_string()
-                    } else {
-                        let padding = " ".repeat(width - current);
-                        format!("{}{}", s, padding)
-                    }
-                };
-
-                let col1_l1 = format!(
-                    "  🤖 Model: {}/{}",
-                    console::style(&provider_name).cyan(),
-                    console::style(&model_name).cyan().bold()
-                );
-                let col1_l2 = format!(
-                    "  🛠  MCP: {}",
-                    if mcp_str == "none" {
-                        console::style("none").dim().to_string()
-                    } else {
-                        console::style(&mcp_str).cyan().to_string()
-                    }
-                );
-                let w1 = std::cmp::max(display_width(&col1_l1), display_width(&col1_l2)) + 2;
-
-                let col2_l1 = format!(
-                    "  💵 Cost: {} ({})",
-                    console::style("$0.00").green(),
-                    console::style("0 tokens").dim()
-                );
-                let col2_l2 = format!(
-                    "  📦 Skills: {}",
-                    if skills_str == "none" {
-                        console::style("none").dim().to_string()
-                    } else {
-                        console::style(&skills_str).cyan().to_string()
-                    }
-                );
-                let w2 = std::cmp::max(display_width(&col2_l1), display_width(&col2_l2)) + 2;
+                        cwd.display().to_string()
+                    };
 
                 println!(
-                    "{} {} {} {}   💡 LSP: {}",
-                    pad_to_width(&col1_l1, w1),
-                    console::style("│").dim(),
-                    pad_to_width(&col2_l1, w2),
-                    console::style("│").dim(),
-                    console::style(lsp_status).green()
+                    "\x1B[38;2;113;113;122m{} · {}\x1B[0m\n",
+                    model_name, pretty_cwd
                 );
-                println!(
-                    "{} {} {} {}   📋 GSD Checklist: {}",
-                    pad_to_width(&col1_l2, w1),
-                    console::style("│").dim(),
-                    pad_to_width(&col2_l2, w2),
-                    console::style("│").dim(),
-                    if checklist_status == "none" {
-                        console::style("none").dim().to_string()
-                    } else {
-                        console::style(&checklist_status).yellow().to_string()
-                    }
-                );
-                println!();
             }
 
             let cli = CLI_CHANNEL_FN.get().expect(
@@ -4940,8 +4885,7 @@ pub async fn run(
                                         }
                                         let _ = write!(
                                             std::io::stderr(),
-                                            "\r\x1B[K{} thinking...",
-                                            console::style("●").magenta()
+                                            "\r\x1B[K\x1B[38;2;139;92;246m●\x1B[0m \x1B[38;2;228;228;231mthinking...\x1B[0m"
                                         );
                                         let _ = std::io::stderr().flush();
                                         last_was_transient = true;
@@ -4965,12 +4909,16 @@ pub async fn run(
                                         if last_was_transient {
                                             let _ = write!(std::io::stderr(), "\r\x1B[K");
                                         }
+                                        let hint_fmt = if hint.is_empty() {
+                                            String::new()
+                                        } else {
+                                            format!(" \x1B[38;2;113;113;122m{}\x1B[0m", hint)
+                                        };
                                         let _ = write!(
                                             std::io::stderr(),
-                                            "\r\x1B[K{} running {} {}...",
-                                            console::style("●").magenta(),
-                                            console::style(&tool_name).white(),
-                                            console::style(&hint).dim()
+                                            "\r\x1B[K\x1B[38;2;139;92;246m●\x1B[0m \x1B[38;2;228;228;231mrunning {}\x1B[0m{}...",
+                                            tool_name,
+                                            hint_fmt
                                         );
                                         let _ = std::io::stderr().flush();
                                         last_was_transient = true;
@@ -4999,18 +4947,20 @@ pub async fn run(
                                             content
                                         };
                                         let hint_to_print = if !last_running_hint.is_empty() {
-                                            &last_running_hint
+                                            format!(
+                                                " \x1B[38;2;113;113;122m{}\x1B[0m",
+                                                last_running_hint
+                                            )
                                         } else {
-                                            ""
+                                            String::new()
                                         };
 
                                         let _ = writeln!(
                                             std::io::stderr(),
-                                            "{} {}  {}\n  {}",
-                                            console::style("●").magenta(),
-                                            console::style(name_to_print).white(),
-                                            console::style(hint_to_print).dim(),
-                                            console::style(&secs_str).dim()
+                                            "\x1B[38;2;139;92;246m●\x1B[0m \x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m{}\n  \x1B[38;2;113;113;122m{}\x1B[0m",
+                                            name_to_print,
+                                            hint_to_print,
+                                            secs_str
                                         );
                                         let _ = std::io::stderr().flush();
                                     } else if trimmed.starts_with('\u{274c}') {
@@ -5035,9 +4985,12 @@ pub async fn run(
                                             content
                                         };
                                         let hint_to_print = if !last_running_hint.is_empty() {
-                                            &last_running_hint
+                                            format!(
+                                                " \x1B[38;2;113;113;122m{}\x1B[0m",
+                                                last_running_hint
+                                            )
                                         } else {
-                                            ""
+                                            String::new()
                                         };
                                         let reason_to_print = if !reason.is_empty() {
                                             reason
@@ -5047,11 +5000,10 @@ pub async fn run(
 
                                         let _ = writeln!(
                                             std::io::stderr(),
-                                            "{} {}  {}\n  {}",
-                                            console::style("✕").red(),
-                                            console::style(name_to_print).white(),
-                                            console::style(hint_to_print).dim(),
-                                            console::style(&reason_to_print).red()
+                                            "\x1B[38;2;239;68;68m✕\x1B[0m \x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m{}\n  \x1B[38;2;239;68;68m{}\x1B[0m",
+                                            name_to_print,
+                                            hint_to_print,
+                                            reason_to_print
                                         );
                                         let _ = std::io::stderr().flush();
                                     } else if trimmed.starts_with('\u{1f4ac}') {
@@ -5068,8 +5020,7 @@ pub async fn run(
                                         }
                                         let _ = write!(
                                             std::io::stderr(),
-                                            "\r\x1B[K{} {}...",
-                                            console::style("●").magenta(),
+                                            "\r\x1B[K\x1B[38;2;139;92;246m●\x1B[0m \x1B[38;2;228;228;231m{}...\x1B[0m",
                                             trimmed
                                         );
                                         let _ = std::io::stderr().flush();
@@ -5110,7 +5061,7 @@ pub async fn run(
                                                     }
                                                 }
                                                 if !prefix.is_empty() {
-                                                    print!("{prefix}");
+                                                    print!("\x1B[38;2;228;228;231m{prefix}\x1B[0m");
                                                     let _ = std::io::stdout().flush();
                                                 }
                                                 pending_buffer.drain(..7);
@@ -5128,7 +5079,9 @@ pub async fn run(
                                                         }
                                                     }
                                                     if !prefix.is_empty() {
-                                                        print!("{prefix}");
+                                                        print!(
+                                                            "\x1B[38;2;228;228;231m{prefix}\x1B[0m"
+                                                        );
                                                         let _ = std::io::stdout().flush();
                                                     }
                                                 }
@@ -5145,7 +5098,7 @@ pub async fn run(
                                 final_text = final_text.trim_start().to_string();
                             }
                             if !final_text.is_empty() {
-                                print!("{final_text}");
+                                print!("\x1B[38;2;228;228;231m{final_text}\x1B[0m");
                                 let _ = std::io::stdout().flush();
                             }
                         }

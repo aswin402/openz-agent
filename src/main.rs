@@ -587,6 +587,7 @@ fn interactive_session_picker(
 
     let mut selected_idx = 0;
     let items_len = sessions.len() + 1;
+    let mut start_viewport = 0;
 
     enable_raw_mode().context("Failed to enable raw mode for session picker")?;
     let mut stdout = std::io::stdout();
@@ -596,28 +597,48 @@ fn interactive_session_picker(
 
     loop {
         let mut lines_drawn = 0;
+        let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let cols = cols as usize;
+        let rows = rows as usize;
+
+        // Calculate K: max items we can display.
+        // Allocate 6 lines for header and 2 lines of safety buffer.
+        let max_display_items = ((rows.saturating_sub(8)) / 3).max(1);
+
+        // Adjust start_viewport to keep selected_idx visible
+        if selected_idx < start_viewport {
+            start_viewport = selected_idx;
+        } else if selected_idx >= start_viewport + max_display_items {
+            start_viewport = selected_idx + 1 - max_display_items;
+        }
+
+        // Safety bound: start_viewport should not overshoot
+        if start_viewport + max_display_items > items_len {
+            start_viewport = items_len.saturating_sub(max_display_items);
+        }
 
         println!("\r\x1B[K");
-        println!("\r\x1B[K{}", console::style("OpenZ").bold().magenta());
+        println!("\r\x1B[K\x1B[1m\x1B[38;2;139;92;246mOpenZ\x1B[0m");
         println!("\r\x1B[K");
-        println!("\r\x1B[K{}", console::style("recent sessions").dim());
+        println!("\r\x1B[K\x1B[38;2;113;113;122mRecent sessions\x1B[0m");
         println!("\r\x1B[K");
         lines_drawn += 5;
 
-        for idx in 0..items_len {
+        let end_viewport = (start_viewport + max_display_items).min(items_len);
+        for idx in start_viewport..end_viewport {
             let is_selected = idx == selected_idx;
             let cursor_str = if is_selected { "❯ " } else { "  " };
             let cursor_style = if is_selected {
-                console::style(cursor_str).bold().magenta()
+                "\x1B[38;2;139;92;246m❯ \x1B[0m"
             } else {
-                console::style(cursor_str)
+                "  "
             };
 
             if idx == sessions.len() {
                 let label = if is_selected {
-                    console::style("new session").bold().white()
+                    "\x1B[1m\x1B[38;2;228;228;231mnew session\x1B[0m"
                 } else {
-                    console::style("new session").dim()
+                    "\x1B[38;2;113;113;122mnew session\x1B[0m"
                 };
                 println!("\r\x1B[K{cursor_style}{label}");
                 println!("\r\x1B[K");
@@ -642,18 +663,56 @@ fn interactive_session_picker(
                     Err(_) => "some time ago".to_string(),
                 };
 
-                let preview_style = if is_selected {
-                    console::style(&s.preview).bold().white()
+                let max_preview_len = if cols > 6 { cols - 6 } else { 10 };
+                let display_preview = if s.preview.len() > max_preview_len {
+                    let mut char_idx = 0;
+                    let mut byte_idx = 0;
+                    for (b_idx, _) in s.preview.char_indices() {
+                        if char_idx >= max_preview_len.saturating_sub(3) {
+                            byte_idx = b_idx;
+                            break;
+                        }
+                        char_idx += 1;
+                    }
+                    if byte_idx == 0 {
+                        format!("{}...", s.preview)
+                    } else {
+                        format!("{}...", &s.preview[..byte_idx])
+                    }
                 } else {
-                    console::style(&s.preview).white()
+                    s.preview.clone()
+                };
+
+                let preview_style = if is_selected {
+                    format!("\x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m", display_preview)
+                } else {
+                    format!("\x1B[38;2;161;161;170m{}\x1B[0m", display_preview)
                 };
 
                 println!("\r\x1B[K{cursor_style}{preview_style}");
-                println!(
-                    "\r\x1B[K   {} · {}",
-                    console::style(time_ago).dim(),
-                    console::style(default_model).dim()
-                );
+
+                let meta_str = format!("{} · {}", time_ago, default_model);
+                let max_meta_len = if cols > 8 { cols - 8 } else { 10 };
+                let display_meta = if meta_str.len() > max_meta_len {
+                    let mut char_idx = 0;
+                    let mut byte_idx = 0;
+                    for (b_idx, _) in meta_str.char_indices() {
+                        if char_idx >= max_meta_len.saturating_sub(3) {
+                            byte_idx = b_idx;
+                            break;
+                        }
+                        char_idx += 1;
+                    }
+                    if byte_idx == 0 {
+                        format!("{}...", meta_str)
+                    } else {
+                        format!("{}...", &meta_str[..byte_idx])
+                    }
+                } else {
+                    meta_str
+                };
+
+                println!("\r\x1B[K   \x1B[38;2;113;113;122m{}\x1B[0m", display_meta);
                 println!("\r\x1B[K");
                 lines_drawn += 3;
             }
