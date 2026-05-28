@@ -34,6 +34,11 @@ tokio::task_local! {
     pub static TUI_SENDER: Option<tokio::sync::mpsc::Sender<crate::agent::tui_events::RuntimeEvent>>;
 }
 
+pub static KEY_LISTENER_PAUSED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+pub static KEY_LISTENER_ACK_PAUSED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn emit_tui_event(event: crate::agent::tui_events::RuntimeEvent) {
     let _ = TUI_SENDER.try_with(|sender| {
         if let Some(s) = sender {
@@ -4057,7 +4062,7 @@ pub async fn run(
                             let mut prev_lines_drawn = 1;
 
                             // Initially draw the clean empty prompt
-                            print!("> ");
+                            print!("\x1B[38;2;139;92;246m>\x1B[0m ");
                             let _ = std::io::stdout().flush();
 
                             loop {
@@ -4088,7 +4093,11 @@ pub async fn run(
                                     print!("╰─ {}", console::style(ghost_text).dim());
                                     lines.len() + 2
                                 } else {
-                                    print!("> {}{}", input_buf, console::style(ghost_text).dim());
+                                    print!(
+                                        "\x1B[38;2;139;92;246m>\x1B[0m {}{}",
+                                        input_buf,
+                                        console::style(ghost_text).dim()
+                                    );
                                     1
                                 };
                                 let _ = std::io::stdout().flush();
@@ -4959,9 +4968,9 @@ pub async fn run(
                                             String::new()
                                         };
 
-                                        let _ = writeln!(
+                                        let _ = write!(
                                             std::io::stderr(),
-                                            "\x1B[38;2;139;92;246m●\x1B[0m \x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m{}\n  \x1B[38;2;113;113;122m{}\x1B[0m",
+                                            "\x1B[38;2;139;92;246m●\x1B[0m \x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m{}\r\n  \x1B[38;2;113;113;122m{}\x1B[0m\r\n",
                                             name_to_print,
                                             hint_to_print,
                                             secs_str
@@ -5002,9 +5011,9 @@ pub async fn run(
                                             "failed".to_string()
                                         };
 
-                                        let _ = writeln!(
+                                        let _ = write!(
                                             std::io::stderr(),
-                                            "\x1B[38;2;239;68;68m✕\x1B[0m \x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m{}\n  \x1B[38;2;239;68;68m{}\x1B[0m",
+                                            "\x1B[38;2;239;68;68m✕\x1B[0m \x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m{}\r\n  \x1B[38;2;239;68;68m{}\x1B[0m\r\n",
                                             name_to_print,
                                             hint_to_print,
                                             reason_to_print
@@ -5065,7 +5074,8 @@ pub async fn run(
                                                     }
                                                 }
                                                 if !prefix.is_empty() {
-                                                    print!("\x1B[38;2;228;228;231m{prefix}\x1B[0m");
+                                                    let output = prefix.replace("\n", "\r\n");
+                                                    print!("\x1B[38;2;228;228;231m{output}\x1B[0m");
                                                     let _ = std::io::stdout().flush();
                                                 }
                                                 pending_buffer.drain(..7);
@@ -5083,8 +5093,9 @@ pub async fn run(
                                                         }
                                                     }
                                                     if !prefix.is_empty() {
+                                                        let output = prefix.replace("\n", "\r\n");
                                                         print!(
-                                                            "\x1B[38;2;228;228;231m{prefix}\x1B[0m"
+                                                            "\x1B[38;2;228;228;231m{output}\x1B[0m"
                                                         );
                                                         let _ = std::io::stdout().flush();
                                                     }
@@ -5102,7 +5113,10 @@ pub async fn run(
                                 final_text = final_text.trim_start().to_string();
                             }
                             if !final_text.is_empty() {
-                                print!("\x1B[38;2;228;228;231m{final_text}\x1B[0m");
+                                print!(
+                                    "\x1B[38;2;228;228;231m{}\x1B[0m",
+                                    final_text.replace("\n", "\r\n")
+                                );
                                 let _ = std::io::stdout().flush();
                             }
                         }
@@ -5114,6 +5128,20 @@ pub async fn run(
                     let key_listener_handle = tokio::spawn(async move {
                         if let Ok(()) = crossterm::terminal::enable_raw_mode() {
                             loop {
+                                if KEY_LISTENER_PAUSED.load(std::sync::atomic::Ordering::Relaxed) {
+                                    let _ = crossterm::terminal::disable_raw_mode();
+                                    KEY_LISTENER_ACK_PAUSED
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                                    while KEY_LISTENER_PAUSED
+                                        .load(std::sync::atomic::Ordering::Relaxed)
+                                    {
+                                        tokio::time::sleep(std::time::Duration::from_millis(50))
+                                            .await;
+                                    }
+                                    KEY_LISTENER_ACK_PAUSED
+                                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                                    let _ = crossterm::terminal::enable_raw_mode();
+                                }
                                 if let Ok(true) =
                                     crossterm::event::poll(std::time::Duration::from_millis(50))
                                 {

@@ -1066,16 +1066,23 @@ fn format_mcp_log(server_name: &str, line: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    
+
     // Ignore JSON-RPC messages if they happen to end up in stderr
-    if (trimmed.starts_with('{') && trimmed.ends_with('}')) || trimmed.starts_with("-->") || trimmed.starts_with("<--") {
+    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || trimmed.starts_with("-->")
+        || trimmed.starts_with("<--")
+    {
         return None;
     }
 
     let line_lower = trimmed.to_lowercase();
-    
+
     // Determine level
-    let level = if line_lower.contains("error") || line_lower.contains("danger") || line_lower.contains("critical") || line_lower.contains("fail") {
+    let level = if line_lower.contains("error")
+        || line_lower.contains("danger")
+        || line_lower.contains("critical")
+        || line_lower.contains("fail")
+    {
         "ERROR"
     } else if line_lower.contains("warn") {
         "WARN"
@@ -1085,14 +1092,34 @@ fn format_mcp_log(server_name: &str, line: &str) -> Option<String> {
 
     // Clean message
     let mut clean_msg = trimmed.to_string();
-    
+
     // Common level separators to strip prefix before the level message
     let separators = &[
-        " - INFO - ", " - WARN - ", " - WARNING - ", " - ERROR - ", " - CRITICAL - ",
-        " [INFO] ", " [WARN] ", " [WARNING] ", " [ERROR] ", " [CRITICAL] ",
-        " INFO ", " WARN ", " WARNING ", " ERROR ", " CRITICAL ",
-        "INFO:", "WARN:", "WARNING:", "ERROR:", "CRITICAL:",
-        "[INFO]", "[WARN]", "[WARNING]", "[ERROR]", "[CRITICAL]"
+        " - INFO - ",
+        " - WARN - ",
+        " - WARNING - ",
+        " - ERROR - ",
+        " - CRITICAL - ",
+        " [INFO] ",
+        " [WARN] ",
+        " [WARNING] ",
+        " [ERROR] ",
+        " [CRITICAL] ",
+        " INFO ",
+        " WARN ",
+        " WARNING ",
+        " ERROR ",
+        " CRITICAL ",
+        "INFO:",
+        "WARN:",
+        "WARNING:",
+        "ERROR:",
+        "CRITICAL:",
+        "[INFO]",
+        "[WARN]",
+        "[WARNING]",
+        "[ERROR]",
+        "[CRITICAL]",
     ];
 
     let mut found = false;
@@ -1106,16 +1133,16 @@ fn format_mcp_log(server_name: &str, line: &str) -> Option<String> {
 
     if !found {
         // Strip leading timestamps in brackets if present, e.g. "[2026-05-28T10:03:01.085Z]"
-        if clean_msg.starts_with('[') {
-            if let Some(close_idx) = clean_msg.find(']') {
-                let inside = &clean_msg[1..close_idx];
-                // If the inside contains digits/colons, it's likely a timestamp
-                if inside.chars().any(|c| c.is_ascii_digit()) {
-                    clean_msg = clean_msg[close_idx + 1..].trim().to_string();
-                }
+        if clean_msg.starts_with('[')
+            && let Some(close_idx) = clean_msg.find(']')
+        {
+            let inside = &clean_msg[1..close_idx];
+            // If the inside contains digits/colons, it's likely a timestamp
+            if inside.chars().any(|c| c.is_ascii_digit()) {
+                clean_msg = clean_msg[close_idx + 1..].trim().to_string();
             }
         }
-        
+
         // Strip leading raw timestamps, e.g. "2026-05-28 15:33:02,814"
         if clean_msg.len() > 20 && clean_msg.chars().take(4).all(|c| c.is_ascii_digit()) {
             // Find first alphabet character or next logical section
@@ -1143,9 +1170,7 @@ fn format_mcp_log(server_name: &str, line: &str) -> Option<String> {
         "WARN" => format!(
             "\x1b[33mWARN\x1b[0m → \x1b[1m\x1b[37m{server_name}:\x1b[0m \x1b[33m{clean_msg}\x1b[0m"
         ),
-        _ => format!(
-            "\x1b[36mINFO\x1b[0m → \x1b[1m\x1b[37m{server_name}:\x1b[0m {clean_msg}"
-        ),
+        _ => format!("\x1b[36mINFO\x1b[0m → \x1b[1m\x1b[37m{server_name}:\x1b[0m {clean_msg}"),
     };
 
     Some(formatted)

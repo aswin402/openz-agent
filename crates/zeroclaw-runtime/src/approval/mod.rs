@@ -5,10 +5,10 @@
 
 use crate::security::AutonomyLevel;
 use chrono::Utc;
+use dialoguer::Select;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::io::{self, BufRead, Write};
 use zeroclaw_config::schema::RiskProfileConfig;
 
 // ── Types ────────────────────────────────────────────────────────
@@ -239,22 +239,34 @@ impl ApprovalManager {
 
 /// Display the approval prompt and read user input from stdin.
 fn prompt_cli_interactive(request: &ApprovalRequest) -> ApprovalResponse {
+    // Temporarily pause key listener and disable raw mode to prevent stdin conflicts and alignment issues
+    crate::agent::loop_::KEY_LISTENER_PAUSED.store(true, std::sync::atomic::Ordering::Relaxed);
+    while !crate::agent::loop_::KEY_LISTENER_ACK_PAUSED.load(std::sync::atomic::Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
     let summary = summarize_args(&request.arguments);
     eprintln!();
     eprintln!("🔧 Agent wants to execute: {}", request.tool_name);
     eprintln!("   {summary}");
-    eprint!("   [Y]es / [N]o / [A]lways for {}: ", request.tool_name);
-    let _ = io::stderr().flush();
 
-    let stdin = io::stdin();
-    let mut line = String::new();
-    if stdin.lock().read_line(&mut line).is_err() {
-        return ApprovalResponse::No;
-    }
+    // Custom colorful theme using indigo/purple for selected option name and selection indicator
+    let mut theme = dialoguer::theme::ColorfulTheme::default();
+    let purple = console::Style::new().color256(99).bold();
+    theme.active_item_style = purple;
 
-    match line.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => ApprovalResponse::Yes,
-        "a" | "always" => ApprovalResponse::Always,
+    let choices = vec!["Yes", "No", "Always"];
+    let selection = Select::with_theme(&theme)
+        .with_prompt(format!("Approve execution of {}?", request.tool_name))
+        .items(&choices)
+        .default(0)
+        .interact_opt();
+
+    crate::agent::loop_::KEY_LISTENER_PAUSED.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    match selection {
+        Ok(Some(0)) => ApprovalResponse::Yes,
+        Ok(Some(2)) => ApprovalResponse::Always,
         _ => ApprovalResponse::No,
     }
 }

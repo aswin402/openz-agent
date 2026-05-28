@@ -267,7 +267,10 @@ impl McpRegistry {
                     servers.push(server);
                     #[cfg(not(test))]
                     {
-                        println!("\x1b[36mINFO\x1b[0m → \x1b[1m\x1b[37m{}:\x1b[0m started successfully", config.name);
+                        println!(
+                            "\x1b[36mINFO\x1b[0m → \x1b[1m\x1b[37m{}:\x1b[0m started successfully",
+                            config.name
+                        );
                     }
                 }
                 // Non-fatal — log and continue with remaining servers
