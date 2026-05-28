@@ -1138,13 +1138,13 @@ fn format_mcp_log(server_name: &str, line: &str) -> Option<String> {
     // Format output with ANSI colors
     let formatted = match level {
         "ERROR" => format!(
-            "\x1b[1m\x1b[31m✖ [ERROR]\x1b[0m \x1b[1m\x1b[37m{server_name}:\x1b[0m \x1b[31m{clean_msg}\x1b[0m"
+            "\x1b[31mERROR\x1b[0m -> \x1b[1m\x1b[37m{server_name}:\x1b[0m \x1b[31m{clean_msg}\x1b[0m"
         ),
         "WARN" => format!(
-            "\x1b[1m\x1b[33m▲ [WARN]\x1b[0m \x1b[1m\x1b[37m{server_name}:\x1b[0m \x1b[33m{clean_msg}\x1b[0m"
+            "\x1b[33mWARN\x1b[0m -> \x1b[1m\x1b[37m{server_name}:\x1b[0m \x1b[33m{clean_msg}\x1b[0m"
         ),
         _ => format!(
-            "\x1b[36m● [INFO]\x1b[0m \x1b[1m\x1b[37m{server_name}:\x1b[0m {clean_msg}"
+            "\x1b[36mINFO\x1b[0m -> \x1b[1m\x1b[37m{server_name}:\x1b[0m {clean_msg}"
         ),
     };
 

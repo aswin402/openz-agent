@@ -246,7 +246,7 @@ impl McpRegistry {
         if has_enabled_servers {
             #[cfg(not(test))]
             {
-                println!("\x1B[1m\x1B[38;2;139;92;246mfirst setting up servers....\x1B[0m");
+                println!("\x1B[1m\x1B[38;2;139;92;246msetting up servers...\x1B[0m");
             }
         }
 
@@ -267,7 +267,7 @@ impl McpRegistry {
                     servers.push(server);
                     #[cfg(not(test))]
                     {
-                        println!("\x1b[36m● [INFO]\x1b[0m \x1b[1m\x1b[37m{}:\x1b[0m started successfully", config.name);
+                        println!("\x1b[36mINFO\x1b[0m -> \x1b[1m\x1b[37m{}:\x1b[0m started successfully", config.name);
                     }
                 }
                 // Non-fatal — log and continue with remaining servers
@@ -281,7 +281,7 @@ impl McpRegistry {
                     #[cfg(not(test))]
                     {
                         println!(
-                            "\x1b[1m\x1b[31m✖ [ERROR]\x1b[0m \x1b[1m\x1b[37m{}:\x1b[0m failed to start ({:#})",
+                            "\x1b[31mERROR\x1b[0m -> \x1b[1m\x1b[37m{}:\x1b[0m failed to start ({:#})",
                             config.name, e
                         );
                     }
