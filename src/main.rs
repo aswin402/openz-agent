@@ -535,12 +535,57 @@ fn list_sessions() -> Vec<SessionFile> {
                                 {
                                     if let Some(history) = state["history"].as_array() {
                                         let mut last_msg = None;
+                                        // First pass: find the last user message
                                         for msg in history.iter().rev() {
                                             let role = msg["role"].as_str().unwrap_or("");
-                                            if role == "user" || role == "assistant" {
-                                                last_msg =
-                                                    Some(msg["content"].as_str().unwrap_or(""));
-                                                break;
+                                            if role == "user" {
+                                                if let Some(s) = msg["content"].as_str() {
+                                                    last_msg = Some(s.to_string());
+                                                    break;
+                                                } else if let Some(arr) = msg["content"].as_array()
+                                                {
+                                                    for block in arr {
+                                                        if let Some(text) = block["text"].as_str() {
+                                                            last_msg = Some(text.to_string());
+                                                            break;
+                                                        }
+                                                    }
+                                                    if last_msg.is_some() {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // Fallback pass: find the last assistant message if no user message was found
+                                        if last_msg.is_none() {
+                                            for msg in history.iter().rev() {
+                                                let role = msg["role"].as_str().unwrap_or("");
+                                                if role == "assistant" {
+                                                    if let Some(s) = msg["content"].as_str() {
+                                                        // Strip think tags
+                                                        let mut cleaned = String::new();
+                                                        let mut remaining = s;
+                                                        while let Some(start_idx) =
+                                                            remaining.find("<think>")
+                                                        {
+                                                            cleaned
+                                                                .push_str(&remaining[..start_idx]);
+                                                            if let Some(end_idx) = remaining
+                                                                [start_idx..]
+                                                                .find("</think>")
+                                                            {
+                                                                remaining = &remaining
+                                                                    [start_idx + end_idx + 8..];
+                                                            } else {
+                                                                remaining = "";
+                                                                break;
+                                                            }
+                                                        }
+                                                        cleaned.push_str(remaining);
+                                                        last_msg = Some(cleaned);
+                                                        break;
+                                                    }
+                                                }
                                             }
                                         }
                                         if let Some(msg) = last_msg {
