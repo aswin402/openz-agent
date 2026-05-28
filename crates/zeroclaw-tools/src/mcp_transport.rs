@@ -93,7 +93,7 @@ impl StdioTransport {
             .envs(&config.env)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("failed to spawn MCP server `{}`", config.name))?;
@@ -124,7 +124,30 @@ impl StdioTransport {
             );
             anyhow::Error::msg(format!("no stdout on MCP server `{}`", config.name))
         })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            ::zeroclaw_log::record!(
+                ERROR,
+                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                    .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                    .with_attrs(::serde_json::json!({
+                        "mcp_server": &config.name,
+                        "missing": "stderr",
+                    })),
+                "mcp_transport: no stderr on spawned MCP server"
+            );
+            anyhow::Error::msg(format!("no stderr on MCP server `{}`", config.name))
+        })?;
         let stdout_lines = BufReader::new(stdout).lines();
+
+        let server_name = config.name.clone();
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                if let Some(formatted) = format_mcp_log(&server_name, &line) {
+                    println!("{}", formatted);
+                }
+            }
+        });
 
         Ok(Self {
             _child: child,
@@ -1034,6 +1057,98 @@ pub fn create_transport(config: &McpServerConfig) -> Result<Box<dyn McpTransport
         McpTransport::Http => Ok(Box::new(HttpTransport::new(config)?)),
         McpTransport::Sse => Ok(Box::new(SseTransport::new(config)?)),
     }
+}
+
+// ── Log Formatting Helper ─────────────────────────────────────────────────
+
+fn format_mcp_log(server_name: &str, line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    
+    // Ignore JSON-RPC messages if they happen to end up in stderr
+    if (trimmed.starts_with('{') && trimmed.ends_with('}')) || trimmed.starts_with("-->") || trimmed.starts_with("<--") {
+        return None;
+    }
+
+    let line_lower = trimmed.to_lowercase();
+    
+    // Determine level
+    let level = if line_lower.contains("error") || line_lower.contains("danger") || line_lower.contains("critical") || line_lower.contains("fail") {
+        "ERROR"
+    } else if line_lower.contains("warn") {
+        "WARN"
+    } else {
+        "INFO"
+    };
+
+    // Clean message
+    let mut clean_msg = trimmed.to_string();
+    
+    // Common level separators to strip prefix before the level message
+    let separators = &[
+        " - INFO - ", " - WARN - ", " - WARNING - ", " - ERROR - ", " - CRITICAL - ",
+        " [INFO] ", " [WARN] ", " [WARNING] ", " [ERROR] ", " [CRITICAL] ",
+        " INFO ", " WARN ", " WARNING ", " ERROR ", " CRITICAL ",
+        "INFO:", "WARN:", "WARNING:", "ERROR:", "CRITICAL:",
+        "[INFO]", "[WARN]", "[WARNING]", "[ERROR]", "[CRITICAL]"
+    ];
+
+    let mut found = false;
+    for sep in separators {
+        if let Some(idx) = trimmed.find(sep) {
+            clean_msg = trimmed[idx + sep.len()..].trim().to_string();
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        // Strip leading timestamps in brackets if present, e.g. "[2026-05-28T10:03:01.085Z]"
+        if clean_msg.starts_with('[') {
+            if let Some(close_idx) = clean_msg.find(']') {
+                let inside = &clean_msg[1..close_idx];
+                // If the inside contains digits/colons, it's likely a timestamp
+                if inside.chars().any(|c| c.is_ascii_digit()) {
+                    clean_msg = clean_msg[close_idx + 1..].trim().to_string();
+                }
+            }
+        }
+        
+        // Strip leading raw timestamps, e.g. "2026-05-28 15:33:02,814"
+        if clean_msg.len() > 20 && clean_msg.chars().take(4).all(|c| c.is_ascii_digit()) {
+            // Find first alphabet character or next logical section
+            if let Some(first_alpha) = clean_msg.find(|c: char| c.is_ascii_alphabetic()) {
+                // If it looks like a prefix like "wikipediaapi._http_client - ", strip it
+                let potential_msg = &clean_msg[first_alpha..];
+                if let Some(dash_idx) = potential_msg.find(" - ") {
+                    clean_msg = potential_msg[dash_idx + 3..].trim().to_string();
+                } else {
+                    clean_msg = potential_msg.trim().to_string();
+                }
+            }
+        }
+    }
+
+    if clean_msg.is_empty() || clean_msg.starts_with('{') || clean_msg.starts_with('}') {
+        return None;
+    }
+
+    // Format output with ANSI colors
+    let formatted = match level {
+        "ERROR" => format!(
+            "\x1b[1m\x1b[31m✖ [ERROR]\x1b[0m \x1b[1m\x1b[37m{server_name}:\x1b[0m \x1b[31m{clean_msg}\x1b[0m"
+        ),
+        "WARN" => format!(
+            "\x1b[1m\x1b[33m▲ [WARN]\x1b[0m \x1b[1m\x1b[37m{server_name}:\x1b[0m \x1b[33m{clean_msg}\x1b[0m"
+        ),
+        _ => format!(
+            "\x1b[36m● [INFO]\x1b[0m \x1b[1m\x1b[37m{server_name}:\x1b[0m {clean_msg}"
+        ),
+    };
+
+    Some(formatted)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

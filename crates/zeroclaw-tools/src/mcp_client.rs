@@ -242,6 +242,14 @@ impl McpRegistry {
         let mut servers = Vec::new();
         let mut tool_index = HashMap::new();
 
+        let has_enabled_servers = configs.iter().any(|c| c.enabled);
+        if has_enabled_servers {
+            #[cfg(not(test))]
+            {
+                println!("\x1B[1m\x1B[38;2;139;92;246mfirst setting up servers....\x1B[0m");
+            }
+        }
+
         for config in configs {
             if !config.enabled {
                 continue;
@@ -257,6 +265,10 @@ impl McpRegistry {
                         tool_index.insert(prefixed, (server_idx, tool.name.clone()));
                     }
                     servers.push(server);
+                    #[cfg(not(test))]
+                    {
+                        println!("\x1b[36m● [INFO]\x1b[0m \x1b[1m\x1b[37m{}:\x1b[0m started successfully", config.name);
+                    }
                 }
                 // Non-fatal — log and continue with remaining servers
                 Err(e) => {
@@ -266,7 +278,22 @@ impl McpRegistry {
                             .with_outcome(::zeroclaw_log::EventOutcome::Failure),
                         &format!("Failed to connect to MCP server `{}`: {:#}", config.name, e)
                     );
+                    #[cfg(not(test))]
+                    {
+                        println!(
+                            "\x1b[1m\x1b[31m✖ [ERROR]\x1b[0m \x1b[1m\x1b[37m{}:\x1b[0m failed to start ({:#})",
+                            config.name, e
+                        );
+                    }
                 }
+            }
+        }
+
+        if has_enabled_servers {
+            #[cfg(not(test))]
+            {
+                println!("\x1B[1m\x1B[32mready to go..\x1B[0m");
+                tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
             }
         }
 

@@ -3888,6 +3888,10 @@ pub async fn run(
             println!("{response}");
             observer.record_event(&ObserverEvent::TurnComplete);
         } else {
+            // Clear the screen cleanly before showing the ASCII art logo and start prompt
+            print!("\x1B[2J\x1B[1;1H");
+            let _ = std::io::stdout().flush();
+
             println!(
                 "{}",
                 console::style("  ___  ____  _____ _   _ _____")
