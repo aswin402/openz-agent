@@ -200,11 +200,26 @@ impl StreamFormatter {
             return;
         }
 
-        if !self.line_buffer.is_empty() {
-            print!("\r\x1B[K");
-        }
+        let term_width = crossterm::terminal::size()
+            .map(|(w, _)| w as usize)
+            .unwrap_or(80);
 
         if parts.len() > 1 {
+            let prev_height = if term_width > 0 {
+                self.line_buffer.chars().count().div_ceil(term_width)
+            } else {
+                1
+            };
+            let prev_height = prev_height.max(1);
+            if !self.line_buffer.is_empty() {
+                if prev_height > 1 {
+                    print!("\x1B[{}A\r", prev_height - 1);
+                } else {
+                    print!("\r");
+                }
+                print!("\x1B[J");
+            }
+
             let completed = format!("{}{}", self.line_buffer, parts[0]);
             let styled = format_agent_text(&completed);
             print!("\x1B[38;2;228;228;231m{}\x1B[0m\r\n", styled);
@@ -220,6 +235,21 @@ impl StreamFormatter {
                 print!("\x1B[38;2;228;228;231m{}\x1B[0m", styled);
             }
         } else {
+            let prev_height = if term_width > 0 {
+                self.line_buffer.chars().count().div_ceil(term_width)
+            } else {
+                1
+            };
+            let prev_height = prev_height.max(1);
+            if !self.line_buffer.is_empty() {
+                if prev_height > 1 {
+                    print!("\x1B[{}A\r", prev_height - 1);
+                } else {
+                    print!("\r");
+                }
+                print!("\x1B[J");
+            }
+
             self.line_buffer.push_str(parts[0]);
             if !self.line_buffer.is_empty() {
                 let styled = format_agent_text(&self.line_buffer);
@@ -231,7 +261,22 @@ impl StreamFormatter {
 
     fn flush(&mut self) {
         if !self.line_buffer.is_empty() {
-            print!("\r\x1B[K");
+            let term_width = crossterm::terminal::size()
+                .map(|(w, _)| w as usize)
+                .unwrap_or(80);
+            let prev_height = if term_width > 0 {
+                self.line_buffer.chars().count().div_ceil(term_width)
+            } else {
+                1
+            };
+            let prev_height = prev_height.max(1);
+            if prev_height > 1 {
+                print!("\x1B[{}A\r", prev_height - 1);
+            } else {
+                print!("\r");
+            }
+            print!("\x1B[J");
+
             let styled = format_agent_text(&self.line_buffer);
             print!("\x1B[38;2;228;228;231m{}\x1B[0m", styled);
             self.line_buffer.clear();
@@ -4295,30 +4340,30 @@ pub async fn run(
                                 let info_str = if let Some(ref ctx) = cost_tracking_context {
                                     if let Ok(summary) = ctx.tracker.get_summary() {
                                         format!(
-                                            " {} | cost: ${:.4} ({} tokens) ",
+                                            " {} | cost: ${:.4} ({}/{} tokens) ",
                                             model_name,
                                             summary.session_cost_usd,
-                                            summary.total_tokens
+                                            summary.total_tokens,
+                                            agent.max_context_tokens
                                         )
                                     } else {
-                                        format!(" {} ", model_name)
+                                        format!(
+                                            " {} | max context: {} tokens ",
+                                            model_name, agent.max_context_tokens
+                                        )
                                     }
                                 } else {
-                                    format!(" {} ", model_name)
+                                    format!(
+                                        " {} | max context: {} tokens ",
+                                        model_name, agent.max_context_tokens
+                                    )
                                 };
-                                let prefix = "___ ";
-                                let suffix = " ";
-                                let base_len = prefix.len() + info_str.len() + suffix.len();
+                                let prefix = "___";
+                                let base_len = prefix.len() + info_str.len();
                                 let separator = if term_width > base_len {
                                     let remaining =
                                         term_width.saturating_sub(base_len).saturating_sub(1);
-                                    format!(
-                                        "{}{}{}{}",
-                                        prefix,
-                                        info_str,
-                                        suffix,
-                                        "_".repeat(remaining)
-                                    )
+                                    format!("{}{}{}", prefix, "_".repeat(remaining), info_str)
                                 } else {
                                     info_str
                                 };
