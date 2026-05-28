@@ -4128,9 +4128,11 @@ pub async fn run(
                 .iter()
                 .any(|msg| msg.role == "user" || msg.role == "assistant");
             if !has_visible_history {
-                println!(
-                    "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
-                );
+                print!("\r");
+                let term_width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80) as usize;
+                let separator = "_".repeat(term_width.saturating_sub(1));
+                println!("\x1B[38;2;139;92;246m{}\x1B[0m", separator);
+                println!();
             } else {
                 for msg in &history {
                     if msg.role == "user" {
@@ -4164,9 +4166,12 @@ pub async fn run(
                         if !msg.content.is_empty() {
                             let styled = format_agent_text(&msg.content);
                             println!("\x1B[38;2;228;228;231m{}\x1B[0m", styled);
-                            println!(
-                                "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
-                            );
+                            print!("\r");
+                            let term_width =
+                                crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80) as usize;
+                            let separator = "_".repeat(term_width.saturating_sub(1));
+                            println!("\x1B[38;2;139;92;246m{}\x1B[0m", separator);
+                            println!();
                         }
                     }
                 }
@@ -4271,7 +4276,11 @@ pub async fn run(
                                 // 2. Redraw the prompt inline
                                 // Move cursor back to the top of our drawing area
                                 if prev_lines_drawn > 1 {
-                                    let up_to_top = 1 + prev_target_line_idx;
+                                    let up_to_top = if prev_lines_drawn == 3 {
+                                        0
+                                    } else {
+                                        1 + prev_target_line_idx
+                                    };
                                     if up_to_top > 0 {
                                         print!("\x1B[{}A", up_to_top);
                                     }
@@ -4280,6 +4289,39 @@ pub async fn run(
                                 print!("\r\x1B[K");
 
                                 let lines: Vec<&str> = input_buf.split('\n').collect();
+                                let term_width =
+                                    crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80)
+                                        as usize;
+                                let info_str = if let Some(ref ctx) = cost_tracking_context {
+                                    if let Ok(summary) = ctx.tracker.get_summary() {
+                                        format!(
+                                            " {} | cost: ${:.4} ({} tokens) ",
+                                            model_name,
+                                            summary.session_cost_usd,
+                                            summary.total_tokens
+                                        )
+                                    } else {
+                                        format!(" {} ", model_name)
+                                    }
+                                } else {
+                                    format!(" {} ", model_name)
+                                };
+                                let prefix = "___ ";
+                                let suffix = " ";
+                                let base_len = prefix.len() + info_str.len() + suffix.len();
+                                let separator = if term_width > base_len {
+                                    let remaining =
+                                        term_width.saturating_sub(base_len).saturating_sub(1);
+                                    format!(
+                                        "{}{}{}{}",
+                                        prefix,
+                                        info_str,
+                                        suffix,
+                                        "_".repeat(remaining)
+                                    )
+                                } else {
+                                    info_str
+                                };
                                 let current_lines_drawn = if lines.len() > 1 {
                                     println!("╭─");
                                     for line in &lines {
@@ -4288,12 +4330,16 @@ pub async fn run(
                                     print!("╰─ {}", console::style(ghost_text).dim());
                                     lines.len() + 2
                                 } else {
-                                    print!(
+                                    println!(
                                         "\x1B[38;2;139;92;246m>\x1B[0m {}{}",
                                         input_buf,
                                         console::style(ghost_text).dim()
                                     );
-                                    1
+                                    print!(
+                                        "\r\x1B[K\x1B[38;2;139;92;246m{}\x1B[0m\n\r\x1B[K",
+                                        separator
+                                    );
+                                    3
                                 };
                                 let _ = std::io::stdout().flush();
 
@@ -4320,8 +4366,12 @@ pub async fn run(
                                 }
 
                                 if current_lines_drawn > 1 {
-                                    let up_count = (current_lines_drawn - 1)
-                                        .saturating_sub(1 + target_line_idx);
+                                    let up_count = if lines.len() > 1 {
+                                        (current_lines_drawn - 1)
+                                            .saturating_sub(1 + target_line_idx)
+                                    } else {
+                                        2
+                                    };
                                     if up_count > 0 {
                                         print!("\x1B[{}A", up_count);
                                     }
@@ -4361,8 +4411,12 @@ pub async fn run(
                                                         // Finalize: move cursor to the end line and print the completed prompt styled
                                                         // Erase the lines drawn first
                                                         if prev_lines_drawn > 1 {
-                                                            let up_to_top =
-                                                                1 + prev_target_line_idx;
+                                                            let up_to_top = if prev_lines_drawn == 3
+                                                            {
+                                                                0
+                                                            } else {
+                                                                1 + prev_target_line_idx
+                                                            };
                                                             if up_to_top > 0 {
                                                                 print!("\x1B[{}A", up_to_top);
                                                             }
@@ -4400,6 +4454,12 @@ pub async fn run(
                                                                 "\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m",
                                                                 input_buf
                                                             );
+                                                            print!("\r");
+                                                            println!(
+                                                                "\x1B[38;2;139;92;246m{}\x1B[0m",
+                                                                separator
+                                                            );
+                                                            println!();
                                                         }
 
                                                         let _ = crossterm::execute!(
@@ -4553,7 +4613,14 @@ pub async fn run(
                                                     input_buf.clear();
                                                     cursor_pos = 0;
                                                     if prev_lines_drawn > 1 {
-                                                        print!("\x1B[{}A", prev_lines_drawn - 1);
+                                                        let up_to_top = if prev_lines_drawn == 3 {
+                                                            0
+                                                        } else {
+                                                            prev_lines_drawn - 1
+                                                        };
+                                                        if up_to_top > 0 {
+                                                            print!("\x1B[{}A", up_to_top);
+                                                        }
                                                     }
                                                     for idx in 0..prev_lines_drawn {
                                                         print!("\r\x1B[K");
@@ -5912,9 +5979,12 @@ After the code block, write a brief explanation (one line) of the improvement st
                     }
 
                     if is_tui_active {
-                        println!(
-                            "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
-                        );
+                        print!("\r");
+                        let term_width =
+                            crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80) as usize;
+                        let separator = "_".repeat(term_width.saturating_sub(1));
+                        println!("\x1B[38;2;139;92;246m{}\x1B[0m", separator);
+                        println!();
                     }
                 }
                 println!("ok byee....");

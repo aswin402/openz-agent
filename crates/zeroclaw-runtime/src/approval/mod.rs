@@ -254,6 +254,9 @@ fn prompt_cli_interactive(request: &ApprovalRequest) -> ApprovalResponse {
     let mut theme = dialoguer::theme::ColorfulTheme::default();
     let purple = console::Style::new().color256(99).bold();
     theme.active_item_style = purple;
+    theme.prompt_style = console::Style::new().white().bold();
+    theme.prompt_prefix = console::style("?".to_string()).white().bold();
+    theme.prompt_suffix = console::style("›".to_string()).white().bold();
 
     let choices = vec!["Yes", "No", "Always"];
     let selection = Select::with_theme(&theme)
