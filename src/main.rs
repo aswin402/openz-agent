@@ -601,32 +601,56 @@ fn interactive_session_picker(
         let cols = cols as usize;
         let rows = rows as usize;
 
-        // Calculate K: max items we can display.
-        // Allocate 6 lines for header and 2 lines of safety buffer.
-        let max_display_items = ((rows.saturating_sub(8)) / 3).max(1);
+        // Allocate 7 lines for header/spacing and 2 lines of safety buffer.
+        let max_display_sessions = ((rows.saturating_sub(9)) / 3).max(1);
 
-        // Adjust start_viewport to keep selected_idx visible
-        if selected_idx < start_viewport {
-            start_viewport = selected_idx;
-        } else if selected_idx >= start_viewport + max_display_items {
-            start_viewport = selected_idx + 1 - max_display_items;
+        // Adjust start_viewport to keep selected_idx visible (0 is new session, 1..=sessions.len() are sessions)
+        if selected_idx > 0 {
+            let s_idx = selected_idx - 1;
+            if s_idx < start_viewport {
+                start_viewport = s_idx;
+            } else if s_idx >= start_viewport + max_display_sessions {
+                start_viewport = s_idx + 1 - max_display_sessions;
+            }
+        } else {
+            start_viewport = 0;
         }
 
         // Safety bound: start_viewport should not overshoot
-        if start_viewport + max_display_items > items_len {
-            start_viewport = items_len.saturating_sub(max_display_items);
+        if start_viewport + max_display_sessions > sessions.len() {
+            start_viewport = sessions.len().saturating_sub(max_display_sessions);
         }
 
         println!("\r\x1B[K");
         println!("\r\x1B[K\x1B[1m\x1B[38;2;139;92;246mOpenZ\x1B[0m");
         println!("\r\x1B[K");
+        lines_drawn += 3;
+
+        // Render "new session" at index 0
+        let is_selected_new = selected_idx == 0;
+        let cursor_str_new = if is_selected_new { "❯ " } else { "  " };
+        let cursor_style_new = if is_selected_new {
+            "\x1B[38;2;139;92;246m❯ \x1B[0m"
+        } else {
+            "  "
+        };
+        let label_new = if is_selected_new {
+            "\x1B[1m\x1B[38;2;228;228;231mnew session\x1B[0m"
+        } else {
+            "\x1B[38;2;113;113;122mnew session\x1B[0m"
+        };
+        println!("\r\x1B[K{cursor_style_new}{label_new}");
+        println!("\r\x1B[K");
+        lines_drawn += 2;
+
+        // Render "Recent sessions" header
         println!("\r\x1B[K\x1B[38;2;113;113;122mRecent sessions\x1B[0m");
         println!("\r\x1B[K");
-        lines_drawn += 5;
+        lines_drawn += 2;
 
-        let end_viewport = (start_viewport + max_display_items).min(items_len);
+        let end_viewport = (start_viewport + max_display_sessions).min(sessions.len());
         for idx in start_viewport..end_viewport {
-            let is_selected = idx == selected_idx;
+            let is_selected = selected_idx > 0 && (idx == selected_idx - 1);
             let cursor_str = if is_selected { "❯ " } else { "  " };
             let cursor_style = if is_selected {
                 "\x1B[38;2;139;92;246m❯ \x1B[0m"
@@ -634,88 +658,77 @@ fn interactive_session_picker(
                 "  "
             };
 
-            if idx == sessions.len() {
-                let label = if is_selected {
-                    "\x1B[1m\x1B[38;2;228;228;231mnew session\x1B[0m"
+            let s = &sessions[idx];
+            let time_ago = match s.modified.elapsed() {
+                Ok(d) => {
+                    let secs = d.as_secs();
+                    if secs < 60 {
+                        "just now".to_string()
+                    } else if secs < 3600 {
+                        format!("{}m ago", secs / 60)
+                    } else if secs < 86400 {
+                        format!("{}h ago", secs / 3600)
+                    } else if secs < 172800 {
+                        "yesterday".to_string()
+                    } else {
+                        format!("{} days ago", secs / 86400)
+                    }
+                }
+                Err(_) => "some time ago".to_string(),
+            };
+
+            let max_preview_len = if cols > 6 { cols - 6 } else { 10 };
+            let display_preview = if s.preview.len() > max_preview_len {
+                let mut char_idx = 0;
+                let mut byte_idx = 0;
+                for (b_idx, _) in s.preview.char_indices() {
+                    if char_idx >= max_preview_len.saturating_sub(3) {
+                        byte_idx = b_idx;
+                        break;
+                    }
+                    char_idx += 1;
+                }
+                if byte_idx == 0 {
+                    format!("{}...", s.preview)
                 } else {
-                    "\x1B[38;2;113;113;122mnew session\x1B[0m"
-                };
-                println!("\r\x1B[K{cursor_style}{label}");
-                println!("\r\x1B[K");
-                lines_drawn += 2;
+                    format!("{}...", &s.preview[..byte_idx])
+                }
             } else {
-                let s = &sessions[idx];
-                let time_ago = match s.modified.elapsed() {
-                    Ok(d) => {
-                        let secs = d.as_secs();
-                        if secs < 60 {
-                            "just now".to_string()
-                        } else if secs < 3600 {
-                            format!("{}m ago", secs / 60)
-                        } else if secs < 86400 {
-                            format!("{}h ago", secs / 3600)
-                        } else if secs < 172800 {
-                            "yesterday".to_string()
-                        } else {
-                            format!("{} days ago", secs / 86400)
-                        }
-                    }
-                    Err(_) => "some time ago".to_string(),
-                };
+                s.preview.clone()
+            };
 
-                let max_preview_len = if cols > 6 { cols - 6 } else { 10 };
-                let display_preview = if s.preview.len() > max_preview_len {
-                    let mut char_idx = 0;
-                    let mut byte_idx = 0;
-                    for (b_idx, _) in s.preview.char_indices() {
-                        if char_idx >= max_preview_len.saturating_sub(3) {
-                            byte_idx = b_idx;
-                            break;
-                        }
-                        char_idx += 1;
+            let preview_style = if is_selected {
+                format!("\x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m", display_preview)
+            } else {
+                format!("\x1B[38;2;161;161;170m{}\x1B[0m", display_preview)
+            };
+
+            println!("\r\x1B[K{cursor_style}{preview_style}");
+
+            let meta_str = format!("{} · {}", time_ago, default_model);
+            let max_meta_len = if cols > 8 { cols - 8 } else { 10 };
+            let display_meta = if meta_str.len() > max_meta_len {
+                let mut char_idx = 0;
+                let mut byte_idx = 0;
+                for (b_idx, _) in meta_str.char_indices() {
+                    if char_idx >= max_meta_len.saturating_sub(3) {
+                        byte_idx = b_idx;
+                        break;
                     }
-                    if byte_idx == 0 {
-                        format!("{}...", s.preview)
-                    } else {
-                        format!("{}...", &s.preview[..byte_idx])
-                    }
+                    char_idx += 1;
+                }
+                if byte_idx == 0 {
+                    format!("{}...", meta_str)
                 } else {
-                    s.preview.clone()
-                };
+                    format!("{}...", &meta_str[..byte_idx])
+                }
+            } else {
+                meta_str
+            };
 
-                let preview_style = if is_selected {
-                    format!("\x1B[1m\x1B[38;2;228;228;231m{}\x1B[0m", display_preview)
-                } else {
-                    format!("\x1B[38;2;161;161;170m{}\x1B[0m", display_preview)
-                };
-
-                println!("\r\x1B[K{cursor_style}{preview_style}");
-
-                let meta_str = format!("{} · {}", time_ago, default_model);
-                let max_meta_len = if cols > 8 { cols - 8 } else { 10 };
-                let display_meta = if meta_str.len() > max_meta_len {
-                    let mut char_idx = 0;
-                    let mut byte_idx = 0;
-                    for (b_idx, _) in meta_str.char_indices() {
-                        if char_idx >= max_meta_len.saturating_sub(3) {
-                            byte_idx = b_idx;
-                            break;
-                        }
-                        char_idx += 1;
-                    }
-                    if byte_idx == 0 {
-                        format!("{}...", meta_str)
-                    } else {
-                        format!("{}...", &meta_str[..byte_idx])
-                    }
-                } else {
-                    meta_str
-                };
-
-                println!("\r\x1B[K   \x1B[38;2;113;113;122m{}\x1B[0m", display_meta);
-                println!("\r\x1B[K");
-                lines_drawn += 3;
-            }
+            println!("\r\x1B[K   \x1B[38;2;113;113;122m{}\x1B[0m", display_meta);
+            println!("\r\x1B[K");
+            lines_drawn += 3;
         }
 
         let _ = stdout.flush();
@@ -735,7 +748,7 @@ fn interactive_session_picker(
                             }
                         }
                         KeyCode::Char('n') => {
-                            selected_idx = sessions.len();
+                            selected_idx = 0;
                         }
                         KeyCode::Enter => {
                             for _ in 0..lines_drawn {
@@ -745,10 +758,10 @@ fn interactive_session_picker(
                             let _ = stdout.write_all(b"\x1B[?25h");
                             let _ = stdout.flush();
                             let _ = disable_raw_mode();
-                            if selected_idx == sessions.len() {
+                            if selected_idx == 0 {
                                 return Ok(None);
                             } else {
-                                return Ok(Some(sessions[selected_idx].path.clone()));
+                                return Ok(Some(sessions[selected_idx - 1].path.clone()));
                             }
                         }
                         KeyCode::Char('c')
