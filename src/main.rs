@@ -185,7 +185,7 @@ async fn main() -> Result<()> {
     let sessions = list_sessions();
     let mut session_file = None;
 
-    if !sessions.is_empty() {
+    if !sessions.is_empty() && std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
         let mut default_model_name = "unknown-model".to_string();
         if let Some((_, _, model_cfg)) = config.resolved_model_provider_for_agent(&agent_alias) {
             default_model_name = model_cfg

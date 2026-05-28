@@ -5495,11 +5495,6 @@ pub async fn run(
                                     }
                                 }
                                 StreamDelta::Text(text) => {
-                                    if last_was_transient {
-                                        let _ = write!(std::io::stderr(), "\r\x1B[K");
-                                        let _ = std::io::stderr().flush();
-                                    }
-                                    last_was_transient = false;
                                     content_streamed_flag
                                         .store(true, std::sync::atomic::Ordering::Relaxed);
                                     pending_buffer.push_str(&text);
@@ -5509,6 +5504,11 @@ pub async fn run(
                                             if let Some(pos) = pending_buffer.find("</think>") {
                                                 pending_buffer.drain(..pos + 8);
                                                 in_think = false;
+                                                if last_was_transient {
+                                                    let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                                    let _ = std::io::stderr().flush();
+                                                    last_was_transient = false;
+                                                }
                                             } else {
                                                 if pending_buffer.len() > 8 {
                                                     let keep_start = pending_buffer.len() - 8;
@@ -5528,6 +5528,12 @@ pub async fn run(
                                                     }
                                                 }
                                                 if !prefix.is_empty() {
+                                                    if last_was_transient {
+                                                        let _ =
+                                                            write!(std::io::stderr(), "\r\x1B[K");
+                                                        let _ = std::io::stderr().flush();
+                                                        last_was_transient = false;
+                                                    }
                                                     formatter.write_text(&prefix);
                                                 }
                                                 pending_buffer.drain(..7);
@@ -5545,6 +5551,14 @@ pub async fn run(
                                                         }
                                                     }
                                                     if !prefix.is_empty() {
+                                                        if last_was_transient {
+                                                            let _ = write!(
+                                                                std::io::stderr(),
+                                                                "\r\x1B[K"
+                                                            );
+                                                            let _ = std::io::stderr().flush();
+                                                            last_was_transient = false;
+                                                        }
                                                         formatter.write_text(&prefix);
                                                     }
                                                 }
@@ -5561,10 +5575,19 @@ pub async fn run(
                                 final_text = final_text.trim_start().to_string();
                             }
                             if !final_text.is_empty() {
+                                if last_was_transient {
+                                    let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                    let _ = std::io::stderr().flush();
+                                    last_was_transient = false;
+                                }
                                 formatter.write_text(&final_text);
                             }
                         }
                         formatter.flush();
+                        if last_was_transient {
+                            let _ = write!(std::io::stderr(), "\r\x1B[K");
+                            let _ = std::io::stderr().flush();
+                        }
                     });
 
                     // Spawn a key listener task to detect Ctrl+C and Esc keypresses while the model runs.
