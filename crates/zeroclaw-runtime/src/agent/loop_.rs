@@ -4124,7 +4124,14 @@ pub async fn run(
             };
 
             // Print loaded history at session start
-            if !history.is_empty() {
+            let has_visible_history = history
+                .iter()
+                .any(|msg| msg.role == "user" || msg.role == "assistant");
+            if !has_visible_history {
+                println!(
+                    "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
+                );
+            } else {
                 for msg in &history {
                     if msg.role == "user" {
                         // Skip system-level tool results or error reports
@@ -4148,14 +4155,8 @@ pub async fn run(
                                 println!("\x1B[1m\x1B[38;2;129;140;248m╰─\x1B[0m");
                             } else {
                                 println!(
-                                    "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
-                                );
-                                println!(
                                     "\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m",
                                     content
-                                );
-                                println!(
-                                    "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
                                 );
                             }
                         }
@@ -4164,7 +4165,7 @@ pub async fn run(
                             let styled = format_agent_text(&msg.content);
                             println!("\x1B[38;2;228;228;231m{}\x1B[0m", styled);
                             println!(
-                                "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m\n"
+                                "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
                             );
                         }
                     }
@@ -4254,6 +4255,7 @@ pub async fn run(
                                 crossterm::event::EnableBracketedPaste
                             );
                             let mut prev_lines_drawn = 1;
+                            let mut prev_target_line_idx = 0;
 
                             loop {
                                 // 1. Determine autocomplete suggestion ghost text
@@ -4267,9 +4269,12 @@ pub async fn run(
                                 }
 
                                 // 2. Redraw the prompt inline
-                                // Move cursor up by (prev_lines_drawn - 1)
+                                // Move cursor back to the top of our drawing area
                                 if prev_lines_drawn > 1 {
-                                    print!("\x1B[{}A", prev_lines_drawn - 1);
+                                    let up_to_top = 1 + prev_target_line_idx;
+                                    if up_to_top > 0 {
+                                        print!("\x1B[{}A", up_to_top);
+                                    }
                                 }
                                 // Move cursor to column 1 and clear line
                                 print!("\r\x1B[K");
@@ -4283,21 +4288,12 @@ pub async fn run(
                                     print!("╰─ {}", console::style(ghost_text).dim());
                                     lines.len() + 2
                                 } else {
-                                    println!(
-                                        "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
-                                    );
-                                    print!("\r\x1B[K");
                                     print!(
                                         "\x1B[38;2;139;92;246m>\x1B[0m {}{}",
                                         input_buf,
                                         console::style(ghost_text).dim()
                                     );
-                                    println!();
-                                    print!("\r\x1B[K");
-                                    print!(
-                                        "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
-                                    );
-                                    3
+                                    1
                                 };
                                 let _ = std::io::stdout().flush();
 
@@ -4323,15 +4319,20 @@ pub async fn run(
                                     target_col_idx = temp_col;
                                 }
 
-                                let up_count =
-                                    (current_lines_drawn - 1).saturating_sub(1 + target_line_idx);
-                                if up_count > 0 {
-                                    print!("\x1B[{}A", up_count);
+                                if current_lines_drawn > 1 {
+                                    let up_count = (current_lines_drawn - 1)
+                                        .saturating_sub(1 + target_line_idx);
+                                    if up_count > 0 {
+                                        print!("\x1B[{}A", up_count);
+                                    }
+                                    print!("\x1B[{}G", 3 + target_col_idx);
+                                } else {
+                                    print!("\x1B[{}G", 3 + target_col_idx);
                                 }
-                                print!("\x1B[{}G", 3 + target_col_idx);
                                 let _ = std::io::stdout().flush();
 
                                 prev_lines_drawn = current_lines_drawn;
+                                prev_target_line_idx = target_line_idx;
 
                                 // 3. Read and process key events
                                 match crossterm::event::read() {
@@ -4360,10 +4361,11 @@ pub async fn run(
                                                         // Finalize: move cursor to the end line and print the completed prompt styled
                                                         // Erase the lines drawn first
                                                         if prev_lines_drawn > 1 {
-                                                            print!(
-                                                                "\x1B[{}A",
-                                                                prev_lines_drawn - 1
-                                                            );
+                                                            let up_to_top =
+                                                                1 + prev_target_line_idx;
+                                                            if up_to_top > 0 {
+                                                                print!("\x1B[{}A", up_to_top);
+                                                            }
                                                         }
                                                         for idx in 0..prev_lines_drawn {
                                                             print!("\r\x1B[K");
@@ -4376,6 +4378,8 @@ pub async fn run(
                                                                 "\x1B[{}A",
                                                                 prev_lines_drawn - 1
                                                             );
+                                                        } else {
+                                                            print!("\r\x1B[K");
                                                         }
 
                                                         if lines.len() > 1 {
@@ -4393,16 +4397,8 @@ pub async fn run(
                                                             );
                                                         } else {
                                                             println!(
-                                                                "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
-                                                            );
-
-                                                            println!(
                                                                 "\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m",
                                                                 input_buf
-                                                            );
-
-                                                            println!(
-                                                                "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
                                                             );
                                                         }
 
@@ -5917,7 +5913,7 @@ After the code block, write a brief explanation (one line) of the improvement st
 
                     if is_tui_active {
                         println!(
-                            "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m\n"
+                            "\x1B[38;2;139;92;246m____________________________________________________________\x1B[0m"
                         );
                     }
                 }
