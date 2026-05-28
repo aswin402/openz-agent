@@ -4103,71 +4103,80 @@ pub async fn run(
                             "/quit",
                             "/exit",
                         ];
-                        let mut h;
 
                         if crossterm::terminal::enable_raw_mode().is_ok() {
+                            let mut prev_lines_drawn = 1;
+
+                            // Initially draw the clean empty prompt
+                            print!("> ");
+                            let _ = std::io::stdout().flush();
+
                             loop {
-                                let (_, current_h) =
-                                    crossterm::terminal::size().unwrap_or((80, 24));
-                                h = current_h;
-
-                                // 1. Draw suggestions at H if starting with '/'
-                                if input_buf.starts_with('/') {
-                                    let matching: Vec<&str> = commands
-                                        .iter()
-                                        .filter(|cmd| cmd.starts_with(&input_buf))
-                                        .cloned()
-                                        .collect();
-
-                                    if !matching.is_empty() {
-                                        let suggestion_line = format!(
-                                            "  {} {}",
-                                            console::style("Suggestions:").yellow().bold(),
-                                            matching
-                                                .iter()
-                                                .map(|cmd| console::style(*cmd).cyan().to_string())
-                                                .collect::<Vec<String>>()
-                                                .join(", ")
-                                        );
-                                        print!(
-                                            "\x1B[s\x1B[{};1H\x1B[K{}\x1B[u",
-                                            h, suggestion_line
-                                        );
-                                    } else {
-                                        print!("\x1B[s\x1B[{};1H\x1B[K\x1B[u", h);
+                                // 1. Determine autocomplete suggestion ghost text
+                                let mut ghost_text = "";
+                                if input_buf.starts_with('/') && !input_buf.contains(' ') {
+                                    if let Some(cmd) = commands.iter().find(|cmd| {
+                                        cmd.starts_with(&input_buf) && cmd.len() > input_buf.len()
+                                    }) {
+                                        ghost_text = &cmd[input_buf.len()..];
                                     }
-                                } else {
-                                    // Clear suggestions from H if input no longer starts with '/'
-                                    print!("\x1B[s\x1B[{};1H\x1B[K\x1B[u", h);
                                 }
+
+                                // 2. Redraw the prompt inline
+                                // Move cursor up by (prev_lines_drawn - 1)
+                                if prev_lines_drawn > 1 {
+                                    print!("\x1B[{}A", prev_lines_drawn - 1);
+                                }
+                                // Move cursor to column 1 and clear line
+                                print!("\r\x1B[K");
+
+                                let lines: Vec<&str> = input_buf.split('\n').collect();
+                                let current_lines_drawn = if lines.len() > 1 {
+                                    println!("╭─");
+                                    for line in &lines {
+                                        println!("│ {}", line);
+                                    }
+                                    print!("╰─ {}", console::style(ghost_text).dim());
+                                    lines.len() + 2
+                                } else {
+                                    print!("> {}{}", input_buf, console::style(ghost_text).dim());
+                                    1
+                                };
                                 let _ = std::io::stdout().flush();
 
-                                // 2. Draw current input at H-1
-                                print!("\x1B[{};1H\x1B[K> {}", h.saturating_sub(1), input_buf);
-                                let _ = std::io::stdout().flush();
+                                // Move cursor left back over the ghost text
+                                if !ghost_text.is_empty() {
+                                    print!("\x1B[{}D", ghost_text.len());
+                                    let _ = std::io::stdout().flush();
+                                }
 
-                                // 3. Read key event
+                                prev_lines_drawn = current_lines_drawn;
+
+                                // 3. Read and process key events
                                 match crossterm::event::read() {
                                     Ok(crossterm::event::Event::Key(key_event)) => {
                                         if key_event.kind == crossterm::event::KeyEventKind::Press {
                                             match key_event.code {
                                                 crossterm::event::KeyCode::Enter => {
-                                                    let _ = crossterm::terminal::disable_raw_mode();
-                                                    println!();
-                                                    break;
+                                                    // Handle Alt+Enter to insert newline
+                                                    if key_event.modifiers.contains(
+                                                        crossterm::event::KeyModifiers::ALT,
+                                                    ) {
+                                                        input_buf.push('\n');
+                                                    } else {
+                                                        // Finalize: move cursor right past the ghost text if any
+                                                        if !ghost_text.is_empty() {
+                                                            print!("\x1B[{}C", ghost_text.len());
+                                                        }
+                                                        println!();
+                                                        let _ =
+                                                            crossterm::terminal::disable_raw_mode();
+                                                        break;
+                                                    }
                                                 }
                                                 crossterm::event::KeyCode::Tab => {
-                                                    if input_buf.starts_with('/') {
-                                                        let matching: Vec<&str> = commands
-                                                            .iter()
-                                                            .filter(|cmd| {
-                                                                cmd.starts_with(&input_buf)
-                                                            })
-                                                            .cloned()
-                                                            .collect();
-                                                        if matching.len() == 1 {
-                                                            input_buf = matching[0].to_string();
-                                                        }
+                                                    if !ghost_text.is_empty() {
+                                                        input_buf.push_str(ghost_text);
                                                     }
                                                 }
                                                 crossterm::event::KeyCode::Char('c')
@@ -4198,7 +4207,20 @@ pub async fn run(
                                                 }
                                                 crossterm::event::KeyCode::Esc => {
                                                     input_buf.clear();
-                                                    print!("\x1B[s\x1B[{};1H\x1B[K\x1B[u", h);
+                                                    // Erase previously drawn lines
+                                                    if prev_lines_drawn > 1 {
+                                                        print!("\x1B[{}A", prev_lines_drawn - 1);
+                                                    }
+                                                    for idx in 0..prev_lines_drawn {
+                                                        print!("\r\x1B[K");
+                                                        if idx < prev_lines_drawn - 1 {
+                                                            print!("\n");
+                                                        }
+                                                    }
+                                                    if prev_lines_drawn > 1 {
+                                                        print!("\x1B[{}A", prev_lines_drawn - 1);
+                                                    }
+                                                    prev_lines_drawn = 1;
                                                     let _ = std::io::stdout().flush();
                                                 }
                                                 _ => {}
@@ -4250,24 +4272,8 @@ pub async fn run(
 
                     let user_input = input.trim().to_string();
 
-                    if is_tui_active {
-                        let (_, h) = crossterm::terminal::size().unwrap_or((80, 24));
-                        // 1. Clear H-1 (input line) and H (suggestions line)
-                        print!("\x1B[{};1H\x1B[K\x1B[{};1H\x1B[K", h.saturating_sub(1), h);
-                        let _ = std::io::stdout().flush();
-                    }
-
                     if user_input.is_empty() {
                         continue;
-                    }
-
-                    if is_tui_active {
-                        let (_, h) = crossterm::terminal::size().unwrap_or((80, 24));
-                        // 2. Echo the user input at H-3 (inside scroll region) and scroll
-                        print!("\x1B[{};1H> {}\n", h.saturating_sub(3), user_input);
-                        // 3. Move cursor back to H-3 so agent prints start there
-                        print!("\x1B[{};1H", h.saturating_sub(3));
-                        let _ = std::io::stdout().flush();
                     }
 
                     if user_input.starts_with('/') {
@@ -4917,14 +4923,165 @@ pub async fn run(
                         let mut pending_buffer = String::new();
                         let mut has_printed_anything = false;
 
+                        let mut last_running_tool = String::new();
+                        let mut last_running_hint = String::new();
+                        let mut last_was_transient = false;
+
                         while let Some(event) = delta_rx.recv().await {
                             match event {
                                 StreamDelta::Status(text) => {
-                                    let premium_text = format_premium_status(&text);
-                                    let _ = write!(std::io::stderr(), "{premium_text}");
-                                    let _ = std::io::stderr().flush();
+                                    let trimmed = text.trim();
+
+                                    // Check status type by emoji prefix
+                                    if trimmed.starts_with('\u{1f914}') {
+                                        // 🤔 Thinking (transient)
+                                        if last_was_transient {
+                                            let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                        }
+                                        let _ = write!(
+                                            std::io::stderr(),
+                                            "\r\x1B[K{} thinking...",
+                                            console::style("●").magenta()
+                                        );
+                                        let _ = std::io::stderr().flush();
+                                        last_was_transient = true;
+                                    } else if trimmed.starts_with('\u{23f3}') {
+                                        // ⏳ Tool Started (transient)
+                                        let content = trimmed
+                                            .strip_prefix('\u{23f3}')
+                                            .unwrap_or(trimmed)
+                                            .trim();
+                                        let parts: Vec<&str> = content.splitn(2, ':').collect();
+                                        let tool_name = parts[0].trim().to_string();
+                                        let hint = if parts.len() > 1 {
+                                            parts[1].trim().to_string()
+                                        } else {
+                                            String::new()
+                                        };
+
+                                        last_running_tool = tool_name.clone();
+                                        last_running_hint = hint.clone();
+
+                                        if last_was_transient {
+                                            let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                        }
+                                        let _ = write!(
+                                            std::io::stderr(),
+                                            "\r\x1B[K{} running {} {}...",
+                                            console::style("●").magenta(),
+                                            console::style(&tool_name).white(),
+                                            console::style(&hint).dim()
+                                        );
+                                        let _ = std::io::stderr().flush();
+                                        last_was_transient = true;
+                                    } else if trimmed.starts_with('\u{2705}') {
+                                        // ✅ Tool Succeeded (permanent)
+                                        if last_was_transient {
+                                            let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                        }
+                                        last_was_transient = false;
+
+                                        let content = trimmed
+                                            .strip_prefix('\u{2705}')
+                                            .unwrap_or(trimmed)
+                                            .trim();
+                                        let mut secs_str = "0.1s".to_string();
+                                        if let Some(start_paren) = content.find('(') {
+                                            if let Some(end_paren) = content.find(')') {
+                                                secs_str =
+                                                    content[start_paren + 1..end_paren].to_string();
+                                            }
+                                        }
+
+                                        let name_to_print = if !last_running_tool.is_empty() {
+                                            &last_running_tool
+                                        } else {
+                                            content
+                                        };
+                                        let hint_to_print = if !last_running_hint.is_empty() {
+                                            &last_running_hint
+                                        } else {
+                                            ""
+                                        };
+
+                                        let _ = writeln!(
+                                            std::io::stderr(),
+                                            "{} {}  {}\n  {}",
+                                            console::style("●").magenta(),
+                                            console::style(name_to_print).white(),
+                                            console::style(hint_to_print).dim(),
+                                            console::style(&secs_str).dim()
+                                        );
+                                        let _ = std::io::stderr().flush();
+                                    } else if trimmed.starts_with('\u{274c}') {
+                                        // ❌ Tool Failed (permanent)
+                                        if last_was_transient {
+                                            let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                        }
+                                        last_was_transient = false;
+
+                                        let content = trimmed
+                                            .strip_prefix('\u{274c}')
+                                            .unwrap_or(trimmed)
+                                            .trim();
+                                        let mut reason = String::new();
+                                        if let Some(colon_pos) = content.find(':') {
+                                            reason = content[colon_pos + 1..].trim().to_string();
+                                        }
+
+                                        let name_to_print = if !last_running_tool.is_empty() {
+                                            &last_running_tool
+                                        } else {
+                                            content
+                                        };
+                                        let hint_to_print = if !last_running_hint.is_empty() {
+                                            &last_running_hint
+                                        } else {
+                                            ""
+                                        };
+                                        let reason_to_print = if !reason.is_empty() {
+                                            reason
+                                        } else {
+                                            "failed".to_string()
+                                        };
+
+                                        let _ = writeln!(
+                                            std::io::stderr(),
+                                            "{} {}  {}\n  {}",
+                                            console::style("✕").red(),
+                                            console::style(name_to_print).white(),
+                                            console::style(hint_to_print).dim(),
+                                            console::style(&reason_to_print).red()
+                                        );
+                                        let _ = std::io::stderr().flush();
+                                    } else if trimmed.starts_with('\u{1f4ac}') {
+                                        // 💬 Message metadata - skip or clear
+                                        if last_was_transient {
+                                            let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                            let _ = std::io::stderr().flush();
+                                        }
+                                        last_was_transient = false;
+                                    } else {
+                                        // Other/generic status (transient)
+                                        if last_was_transient {
+                                            let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                        }
+                                        let _ = write!(
+                                            std::io::stderr(),
+                                            "\r\x1B[K{} {}...",
+                                            console::style("●").magenta(),
+                                            trimmed
+                                        );
+                                        let _ = std::io::stderr().flush();
+                                        last_was_transient = true;
+                                    }
                                 }
                                 StreamDelta::Text(text) => {
+                                    if last_was_transient {
+                                        let _ = write!(std::io::stderr(), "\r\x1B[K");
+                                        let _ = std::io::stderr().flush();
+                                    }
+                                    last_was_transient = false;
                                     content_streamed_flag
                                         .store(true, std::sync::atomic::Ordering::Relaxed);
                                     pending_buffer.push_str(&text);
@@ -5996,49 +6153,6 @@ pub async fn process_message(
         .instrument(__zc_scope_span)
         .instrument(__zc_attribution_span)
         .await
-}
-
-fn format_premium_status(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.starts_with('\u{1f4ac}') {
-        // 💬
-        let content = trimmed.strip_prefix('\u{1f4ac}').unwrap_or(trimmed).trim();
-        format!(
-            "  {} {}\n",
-            console::style("✦").cyan().bold(),
-            console::style(content).cyan()
-        )
-    } else if trimmed.starts_with('\u{23f3}') {
-        // ⏳
-        let content = trimmed.strip_prefix('\u{23f3}').unwrap_or(trimmed).trim();
-        format!(
-            "  {} Running {}...\n",
-            console::style("⚙").yellow().bold(),
-            console::style(content).yellow()
-        )
-    } else if trimmed.starts_with('\u{2705}') {
-        // ✅
-        let content = trimmed.strip_prefix('\u{2705}').unwrap_or(trimmed).trim();
-        format!(
-            "  {} Completed {}\n",
-            console::style("✦").green().bold(),
-            console::style(content).green()
-        )
-    } else if trimmed.starts_with('\u{274c}') {
-        // ❌
-        let content = trimmed.strip_prefix('\u{274c}').unwrap_or(trimmed).trim();
-        format!(
-            "  {} {}\n",
-            console::style("✗").red().bold(),
-            console::style(content).red()
-        )
-    } else {
-        format!(
-            "  {} {}\n",
-            console::style("⚙").dim(),
-            console::style(trimmed).dim()
-        )
-    }
 }
 
 async fn run_configure_wizard_inline(config: &mut Config) -> Result<()> {

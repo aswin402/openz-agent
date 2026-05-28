@@ -152,27 +152,14 @@ async fn main() -> Result<()> {
     let mut session_file = None;
 
     if !sessions.is_empty() {
-        let mut items = vec!["Start a new session".to_string()];
-        for (i, s) in sessions.iter().enumerate() {
-            let local_time: chrono::DateTime<chrono::Local> = s.modified.into();
-            let time_str = local_time.format("%Y-%m-%d %H:%M:%S");
-            let label = if i == 0 {
-                format!("Resume last session ({time_str}): \"{}\"", s.preview)
-            } else {
-                format!("Session from {time_str}: \"{}\"", s.preview)
-            };
-            items.push(label);
+        let mut default_model_name = "unknown-model".to_string();
+        if let Some((_, _, model_cfg)) = config.resolved_model_provider_for_agent(&agent_alias) {
+            default_model_name = model_cfg
+                .model
+                .clone()
+                .unwrap_or_else(|| "unknown-model".to_string());
         }
-
-        let selection = Select::new()
-            .with_prompt("Select chat session")
-            .items(&items)
-            .default(0)
-            .interact()?;
-
-        if selection > 0 {
-            session_file = Some(sessions[selection - 1].path.clone());
-        }
+        session_file = interactive_session_picker(&sessions, &default_model_name)?;
     }
 
     let session_state_file = if let Some(path) = session_file {
@@ -582,6 +569,155 @@ fn list_sessions() -> Vec<SessionFile> {
 
     sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
     sessions
+}
+
+fn interactive_session_picker(
+    sessions: &[SessionFile],
+    default_model: &str,
+) -> Result<Option<std::path::PathBuf>> {
+    use crossterm::{
+        event::{self, Event, KeyCode, KeyModifiers},
+        terminal::{disable_raw_mode, enable_raw_mode},
+    };
+    use std::io::Write;
+
+    if sessions.is_empty() {
+        return Ok(None);
+    }
+
+    let mut selected_idx = 0;
+    let items_len = sessions.len() + 1;
+
+    enable_raw_mode().context("Failed to enable raw mode for session picker")?;
+    let mut stdout = std::io::stdout();
+
+    let _ = stdout.write_all(b"\x1B[?25l");
+    let _ = stdout.flush();
+
+    loop {
+        let mut lines_drawn = 0;
+
+        println!("\r\x1B[K");
+        println!("\r\x1B[K{}", console::style("OpenZ").bold().magenta());
+        println!("\r\x1B[K");
+        println!("\r\x1B[K{}", console::style("recent sessions").dim());
+        println!("\r\x1B[K");
+        lines_drawn += 5;
+
+        for idx in 0..items_len {
+            let is_selected = idx == selected_idx;
+            let cursor_str = if is_selected { "❯ " } else { "  " };
+            let cursor_style = if is_selected {
+                console::style(cursor_str).bold().magenta()
+            } else {
+                console::style(cursor_str)
+            };
+
+            if idx == sessions.len() {
+                let label = if is_selected {
+                    console::style("new session").bold().white()
+                } else {
+                    console::style("new session").dim()
+                };
+                println!("\r\x1B[K{cursor_style}{label}");
+                println!("\r\x1B[K");
+                lines_drawn += 2;
+            } else {
+                let s = &sessions[idx];
+                let time_ago = match s.modified.elapsed() {
+                    Ok(d) => {
+                        let secs = d.as_secs();
+                        if secs < 60 {
+                            "just now".to_string()
+                        } else if secs < 3600 {
+                            format!("{}m ago", secs / 60)
+                        } else if secs < 86400 {
+                            format!("{}h ago", secs / 3600)
+                        } else if secs < 172800 {
+                            "yesterday".to_string()
+                        } else {
+                            format!("{} days ago", secs / 86400)
+                        }
+                    }
+                    Err(_) => "some time ago".to_string(),
+                };
+
+                let preview_style = if is_selected {
+                    console::style(&s.preview).bold().white()
+                } else {
+                    console::style(&s.preview).white()
+                };
+
+                println!("\r\x1B[K{cursor_style}{preview_style}");
+                println!(
+                    "\r\x1B[K   {} · {}",
+                    console::style(time_ago).dim(),
+                    console::style(default_model).dim()
+                );
+                println!("\r\x1B[K");
+                lines_drawn += 3;
+            }
+        }
+
+        let _ = stdout.flush();
+
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key_event) = event::read()? {
+                if key_event.kind == event::KeyEventKind::Press {
+                    match key_event.code {
+                        KeyCode::Up => {
+                            if selected_idx > 0 {
+                                selected_idx -= 1;
+                            }
+                        }
+                        KeyCode::Down => {
+                            if selected_idx < items_len - 1 {
+                                selected_idx += 1;
+                            }
+                        }
+                        KeyCode::Char('n') => {
+                            selected_idx = sessions.len();
+                        }
+                        KeyCode::Enter => {
+                            for _ in 0..lines_drawn {
+                                print!("\x1B[1A\x1B[K");
+                            }
+                            let _ = stdout.flush();
+                            let _ = stdout.write_all(b"\x1B[?25h");
+                            let _ = stdout.flush();
+                            let _ = disable_raw_mode();
+                            if selected_idx == sessions.len() {
+                                return Ok(None);
+                            } else {
+                                return Ok(Some(sessions[selected_idx].path.clone()));
+                            }
+                        }
+                        KeyCode::Char('c')
+                            if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            let _ = stdout.write_all(b"\x1B[?25h");
+                            let _ = stdout.flush();
+                            let _ = disable_raw_mode();
+                            std::process::exit(130);
+                        }
+                        KeyCode::Esc => {
+                            for _ in 0..lines_drawn {
+                                print!("\x1B[1A\x1B[K");
+                            }
+                            let _ = stdout.flush();
+                            let _ = stdout.write_all(b"\x1B[?25h");
+                            let _ = stdout.flush();
+                            let _ = disable_raw_mode();
+                            return Ok(None);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        print!("\x1B[{}A", lines_drawn);
+    }
 }
 
 async fn run_mcp_setup_wizard(config: &mut Config) -> Result<()> {

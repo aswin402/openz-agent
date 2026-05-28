@@ -1,0 +1,22 @@
+# Append these lines to your ~/.zeroclaw/config.toml under [[mcp.servers]]:
+
+# OpenCode AI integration (bridges tool execution to OpenCode)
+[[mcp.servers]]
+name = "opencode"
+transport = "stdio"
+command = "npx"
+args = ["-y", "opencode-mcp"]
+
+# Nous Research Hermes Agent (bridges conversation/skill management)
+[[mcp.servers]]
+name = "hermes"
+transport = "stdio"
+command = "hermes"
+args = ["mcp", "serve"]
+
+# Crush terminal-centric coding agent
+[[mcp.servers]]
+name = "crush"
+transport = "stdio"
+command = "crush"
+args = ["mcp", "serve"]
