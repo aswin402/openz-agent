@@ -4882,8 +4882,8 @@ pub async fn run(
                                 crate::agent::tui_events::TUI_SUSPENDED
                                     .store(true, std::sync::atomic::Ordering::SeqCst);
                                 emit_tui_event(crate::agent::tui_events::RuntimeEvent::Suspended);
-                                // Reset scroll region
-                                print!("\x1B[r");
+                                // Reset scroll region and restore cursor position
+                                print!("\x1B[s\x1B[r\x1B[u");
                                 let _ = std::io::stdout().flush();
 
                                 println!(
@@ -5080,8 +5080,8 @@ pub async fn run(
                                 crate::agent::tui_events::TUI_SUSPENDED
                                     .store(true, std::sync::atomic::Ordering::SeqCst);
                                 emit_tui_event(crate::agent::tui_events::RuntimeEvent::Suspended);
-                                // Reset scroll region
-                                print!("\x1B[r");
+                                // Reset scroll region and restore cursor position
+                                print!("\x1B[s\x1B[r\x1B[u");
                                 let _ = std::io::stdout().flush();
 
                                 let sel = Select::with_theme(&theme)
@@ -5225,8 +5225,8 @@ pub async fn run(
                                 crate::agent::tui_events::TUI_SUSPENDED
                                     .store(true, std::sync::atomic::Ordering::SeqCst);
                                 emit_tui_event(crate::agent::tui_events::RuntimeEvent::Suspended);
-                                // Reset scroll region
-                                print!("\x1B[r");
+                                // Reset scroll region and restore cursor position
+                                print!("\x1B[s\x1B[r\x1B[u");
                                 let _ = std::io::stdout().flush();
 
                                 let res = run_configure_wizard_inline(&mut config_mut).await;
