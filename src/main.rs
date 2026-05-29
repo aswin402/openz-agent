@@ -376,7 +376,7 @@ async fn run_configure_wizard(config: &mut Config) -> Result<()> {
 
     let prefix = format!("providers.models.{picked}.{alias}");
     if !api_key.is_empty() {
-        config.set_secret_persistent(&format!("{prefix}.api_key"), api_key)?;
+        config.set_secret_persistent(&format!("{prefix}.api_key"), api_key.clone())?;
     }
     config.set_prop_persistent(&format!("{prefix}.model"), &model)?;
 
@@ -404,6 +404,117 @@ async fn run_configure_wizard(config: &mut Config) -> Result<()> {
     )?;
     config.set_prop_persistent(&format!("{agent_prefix}.risk_profile"), "default")?;
     config.set_prop_persistent(&format!("{agent_prefix}.runtime_profile"), "default")?;
+
+    // --- OPTIONAL TELEGRAM SETUP ---
+    println!();
+    let setup_telegram = dialoguer::Confirm::new()
+        .with_prompt("Would you like to set up Telegram for messaging and notifications?")
+        .default(false)
+        .interact()?;
+
+    if setup_telegram {
+        let bot_token: String = dialoguer::Password::new()
+            .with_prompt("Enter Telegram Bot Token (from @BotFather)")
+            .interact()?;
+        let bot_token = bot_token.trim().to_string();
+
+        if !bot_token.is_empty() {
+            config.set_secret_persistent("channels.telegram.default.bot_token", bot_token)?;
+            config.set_prop_persistent("channels.telegram.default.enabled", "true")?;
+            println!("{}", console::style("✓ Telegram configuration added!").green());
+        }
+    }
+
+    // --- OPTIONAL SUBAGENTS PROVIDER SETUP ---
+    println!();
+    let setup_subagents = dialoguer::Confirm::new()
+        .with_prompt("Would you like to configure a different provider for subagents (e.g. a cheaper/faster model for coder, reviewer)?")
+        .default(false)
+        .interact()?;
+
+    if setup_subagents {
+        let selection_sub = Select::new()
+            .with_prompt("Select Subagents AI Model Provider")
+            .items(&providers)
+            .default(selection)
+            .interact()?;
+
+        let picked_sub = if selection_sub == providers.len() - 1 {
+            let custom: String = dialoguer::Input::new()
+                .with_prompt("Enter Custom Provider Name")
+                .interact_text()?;
+            custom.trim().to_lowercase()
+        } else {
+            providers[selection_sub].to_string()
+        };
+
+        let needs_key_sub = !matches!(picked_sub.as_str(), "ollama" | "lmstudio");
+
+        let api_key_sub = if needs_key_sub {
+            let key: String = dialoguer::Password::new()
+                .with_prompt("Enter Subagents API Key (press Enter to reuse main key if applicable)")
+                .allow_empty_password(true)
+                .interact()?;
+            key.trim().to_string()
+        } else {
+            String::new()
+        };
+
+        let default_model_sub = match picked_sub.as_str() {
+            "anthropic" => "claude-3-5-haiku-20241022",
+            "openai" => "gpt-4o-mini",
+            "gemini" => "gemini-1.5-flash",
+            "groq" => "llama3-8b-8192",
+            "deepseek" => "deepseek-chat",
+            "ollama" => "llama3",
+            "lmstudio" => "model-id",
+            _ => "model-id",
+        };
+
+        let model_sub: String = dialoguer::Input::new()
+            .with_prompt("Enter Subagents Model ID")
+            .default(default_model_sub.to_string())
+            .interact_text()?;
+        let model_sub = model_sub.trim().to_string();
+
+        let alias_sub = "default";
+        config.providers.models.ensure(&picked_sub, alias_sub);
+
+        let prefix_sub = format!("providers.models.{picked_sub}.{alias_sub}");
+        
+        let final_api_key_sub = if api_key_sub.is_empty() && picked_sub == picked {
+            api_key.clone()
+        } else {
+            api_key_sub
+        };
+
+        if !final_api_key_sub.is_empty() {
+            config.set_secret_persistent(&format!("{prefix_sub}.api_key"), final_api_key_sub)?;
+        }
+        config.set_prop_persistent(&format!("{prefix_sub}.model"), &model_sub)?;
+
+        // Update standard subagents to point to this subagent provider
+        let subagent_names = vec![
+            "coder",
+            "reviewer",
+            "research-agent",
+            "openz-planagent",
+            "worker",
+            "docs-agent",
+            "vision-agent",
+        ];
+
+        for sub_name in subagent_names {
+            let sa_prefix = format!("agents.{}", sub_name);
+            config.set_prop_persistent(
+                &format!("{sa_prefix}.model_provider"),
+                &format!("{picked_sub}.{alias_sub}"),
+            )?;
+            config.set_prop_persistent(&format!("{sa_prefix}.risk_profile"), "default")?;
+            config.set_prop_persistent(&format!("{sa_prefix}.runtime_profile"), "default")?;
+        }
+        println!("{}", console::style("✓ Subagents configuration added!").green());
+    }
 
     config.save_dirty().await?;
     println!();

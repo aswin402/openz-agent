@@ -559,9 +559,66 @@ fn run_specialized_agent<'a>(
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
+        let err = last_error.unwrap_or_else(|| {
             anyhow::anyhow!("No model providers available for subagent {}", agent_name)
-        }))
+        });
+
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "subagent": agent_name,
+                    "error": format!("{}", err)
+                })),
+            &format!("Subagent '{}' failed. Primary agent will execute the task itself.", agent_name)
+        );
+
+        println!(
+            "{}",
+            console::style(format!(
+                "⚠️ Subagent '{}' failed: {:#}. Falling back to Primary Agent...",
+                agent_name, err
+            ))
+            .red()
+            .bold()
+        );
+
+        let primary_agent_name = if config.agents.contains_key("agentz") {
+            "agentz"
+        } else if config.agents.contains_key("oh-my-openagent") {
+            "oh-my-openagent"
+        } else if config.agents.contains_key("assistant") {
+            "assistant"
+        } else {
+            config.agents.keys().next().map(|s| s.as_str()).unwrap_or("assistant")
+        };
+
+        let try_config = custom_config.clone();
+        let overrides = AgentRunOverrides {
+            is_subagent: false,
+            ..Default::default()
+        };
+
+        let run_future = crate::agent::run_boxed(
+            try_config,
+            primary_agent_name,
+            Some(prompt.to_string()),
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            None,
+            allowed_tools.clone(),
+            overrides,
+        );
+
+        match tokio::time::timeout(timeout_duration, Box::pin(run_future)).await {
+            Ok(Ok(res)) => Ok(res),
+            Ok(Err(e)) => Err(anyhow::anyhow!("Primary agent execution also failed: {:#}", e)),
+            Err(_) => Err(anyhow::anyhow!("Primary agent execution timed out after {:?}", timeout_duration)),
+        }
     })
 }
 

@@ -3792,19 +3792,18 @@ mod tests {
     }
 
     #[test]
-    fn minimax_provider_supports_native_tool_calling_with_system_merge() {
-        let p = OpenAiCompatibleModelProvider::new(
+    fn minimax_provider_disables_native_tool_calling() {
+        let p = OpenAiCompatibleModelProvider::new_merge_system_into_user(
             "test",
             "MiniMax",
             "https://api.minimax.chat/v1",
             Some("k"),
             AuthStyle::Bearer,
-        )
-        .with_merge_system_into_user();
+        );
         let caps = <OpenAiCompatibleModelProvider as ModelProvider>::capabilities(&p);
         assert!(
-            caps.native_tool_calling,
-            "MiniMax should preserve native tool calling when system messages are merged"
+            !caps.native_tool_calling,
+            "MiniMax should disable native tool calling when system messages are merged"
         );
         assert!(!caps.vision);
     }

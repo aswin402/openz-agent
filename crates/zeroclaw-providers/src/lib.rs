@@ -2181,10 +2181,10 @@ mod tests {
     }
 
     #[test]
-    fn factory_minimax_supports_native_tool_calling() {
+    fn factory_minimax_disables_native_tool_calling() {
         let minimax =
             create_model_provider("minimax", Some("key")).expect("model_provider should resolve");
-        assert!(minimax.supports_native_tools());
+        assert!(!minimax.supports_native_tools());
     }
 
     #[test]

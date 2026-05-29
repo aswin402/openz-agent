@@ -573,14 +573,13 @@ impl FamilyProviderFactory for MinimaxModelProviderConfig {
             })
             .transpose()?;
         let resolved_key = refreshed_key.as_deref().or(key);
-        let p = OpenAiCompatibleModelProvider::new(
+        let p = OpenAiCompatibleModelProvider::new_merge_system_into_user(
             alias,
             "MiniMax",
             api_url.unwrap_or(crate::MINIMAX_INTL_BASE_URL),
             resolved_key,
             AuthStyle::Bearer,
-        )
-        .with_merge_system_into_user();
+        );
         Ok(apply_compat_options(p, opts))
     }
 }
