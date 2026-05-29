@@ -4569,6 +4569,10 @@ pub async fn run(
                                                                 "\r\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m\n",
                                                                 input_buf
                                                             );
+                                                            print!(
+                                                                "\r\x1B[38;2;139;92;246m{}\x1B[0m\n",
+                                                                separator
+                                                            );
                                                         } else {
                                                             if lines.len() > 1 {
                                                                 print!(
