@@ -3132,6 +3132,25 @@ pub fn apply_text_tool_prompt_policy(
     expose_text_tool_protocol
 }
 
+fn get_command_description(cmd: &str) -> &'static str {
+    match cmd {
+        "/help" => "Show this help message",
+        "/commands" => "Show this help message",
+        "/clear" => "Clear conversation history",
+        "/new" => "Clear conversation history",
+        "/model" => "Switch model interactively or via <p>/<m>",
+        "/models" => "Switch model interactively or via <p>/<m>",
+        "/skills" => "List currently installed skills and details",
+        "/mcp" => "List configured MCP servers and details",
+        "/status" => "Show current session status details",
+        "/configure" => "Run the configuration wizard inline",
+        "/logs" => "Show the last 20 log events",
+        "/quit" => "Exit interactive mode",
+        "/exit" => "Exit interactive mode",
+        _ => "",
+    }
+}
+
 fn get_model_max_context(model_name: &str) -> Option<usize> {
     let name = model_name.to_lowercase();
     if name.contains("gpt-4o-mini")
@@ -4303,8 +4322,10 @@ pub async fn run(
                         let mut input_buf = String::new();
                         let mut cursor_pos = 0;
                         let mut is_eof = false;
+                        let mut selected_cmd_idx = 0;
                         let commands = vec![
                             "/help",
+                            "/commands",
                             "/clear",
                             "/new",
                             "/model",
@@ -4325,11 +4346,35 @@ pub async fn run(
                             );
                             let mut prev_lines_drawn = 1;
                             let mut prev_target_line_idx = 0;
+                            let mut prev_is_multiline = false;
 
                             loop {
                                 // 1. Determine autocomplete suggestion ghost text
+                                let mut matching_commands = Vec::new();
+                                if input_buf.starts_with('/')
+                                    && !input_buf.contains(' ')
+                                    && !input_buf.contains('\n')
+                                {
+                                    for cmd in &commands {
+                                        if cmd.starts_with(&input_buf) {
+                                            matching_commands.push(*cmd);
+                                        }
+                                    }
+                                }
+
+                                let menu_len = matching_commands.len();
+                                let is_menu_active = menu_len > 0;
+                                if selected_cmd_idx >= menu_len {
+                                    selected_cmd_idx = 0;
+                                }
+
                                 let mut ghost_text = "";
-                                if input_buf.starts_with('/') && !input_buf.contains(' ') {
+                                if is_menu_active {
+                                    let selected_cmd = matching_commands[selected_cmd_idx];
+                                    if selected_cmd.len() > input_buf.len() {
+                                        ghost_text = &selected_cmd[input_buf.len()..];
+                                    }
+                                } else if input_buf.starts_with('/') && !input_buf.contains(' ') {
                                     if let Some(cmd) = commands.iter().find(|cmd| {
                                         cmd.starts_with(&input_buf) && cmd.len() > input_buf.len()
                                     }) {
@@ -4340,23 +4385,24 @@ pub async fn run(
                                 // 2. Redraw the prompt inline
                                 // Move cursor back to the top of our drawing area
                                 if prev_lines_drawn > 1 {
-                                    let up_to_top = if prev_lines_drawn == 3 {
-                                        0
-                                    } else {
+                                    let up_to_top = if prev_is_multiline {
                                         1 + prev_target_line_idx
+                                    } else {
+                                        0
                                     };
                                     if up_to_top > 0 {
                                         print!("\x1B[{}A", up_to_top);
                                     }
                                 }
-                                // Move cursor to column 1 and clear line
-                                print!("\r\x1B[K");
+                                // Clear everything from cursor to end of screen
+                                print!("\r\x1B[J");
 
-                                let lines: Vec<&str> = input_buf.split('\n').collect();
+                                let mut lines: Vec<&str> = input_buf.split('\n').collect();
                                 let term_width =
                                     crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80)
                                         as usize;
-                                let max_ctx = get_model_max_context(&model_name).unwrap_or(agent.max_context_tokens);
+                                let max_ctx = get_model_max_context(&model_name)
+                                    .unwrap_or(agent.max_context_tokens);
                                 let info_str = if let Some(ref ctx) = cost_tracking_context {
                                     if let Ok(summary) = ctx.tracker.get_summary() {
                                         format!(
@@ -4373,10 +4419,7 @@ pub async fn run(
                                         )
                                     }
                                 } else {
-                                    format!(
-                                        " {} | max context: {} tokens ",
-                                        model_name, max_ctx
-                                    )
+                                    format!(" {} | max context: {} tokens ", model_name, max_ctx)
                                 };
                                 let prefix = "___";
                                 let base_len = prefix.len() + info_str.len();
@@ -4387,25 +4430,45 @@ pub async fn run(
                                 } else {
                                     info_str
                                 };
+
                                 let current_lines_drawn = if lines.len() > 1 {
-                                    println!("╭─");
+                                    print!("\r╭─\n");
                                     for line in &lines {
-                                        println!("│ {}", line);
+                                        print!("\r│ {}\n", line);
                                     }
-                                    print!("╰─ {}", console::style(ghost_text).dim());
+                                    print!("\r╰─ {}", console::style(ghost_text).dim());
                                     lines.len() + 2
                                 } else {
-                                    println!(
-                                        "\x1B[38;2;139;92;246m>\x1B[0m {}{}",
+                                    print!(
+                                        "\r\x1B[38;2;139;92;246m>\x1B[0m {}{}\n",
                                         input_buf,
                                         console::style(ghost_text).dim()
                                     );
-                                    print!(
-                                        "\r\x1B[K\x1B[38;2;139;92;246m{}\x1B[0m\n\r\x1B[K",
-                                        separator
-                                    );
-                                    3
+                                    print!("\r\x1B[38;2;139;92;246m{}\x1B[0m\n", separator);
+                                    if is_menu_active {
+                                        for (idx, cmd) in matching_commands.iter().enumerate() {
+                                            let desc = get_command_description(cmd);
+                                            let is_selected = idx == selected_cmd_idx;
+                                            if is_selected {
+                                                print!(
+                                                    "\r\x1B[1m\x1B[38;2;129;140;248m❯ {}   \x1B[0m\x1B[38;2;129;140;248m{}\x1B[0m\n",
+                                                    cmd, desc
+                                                );
+                                            } else {
+                                                print!(
+                                                    "\r  \x1B[38;2;156;163;175m{}   \x1B[0m\x1B[38;2;107;114;128m{}\x1B[0m\n",
+                                                    cmd, desc
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if is_menu_active {
+                                        2 + matching_commands.len()
+                                    } else {
+                                        2
+                                    }
                                 };
+
                                 let _ = std::io::stdout().flush();
 
                                 // 2.5. Position cursor at cursor_pos
@@ -4430,24 +4493,27 @@ pub async fn run(
                                     target_col_idx = temp_col;
                                 }
 
-                                if current_lines_drawn > 1 {
-                                    let up_count = if lines.len() > 1 {
-                                        (current_lines_drawn - 1)
-                                            .saturating_sub(1 + target_line_idx)
-                                    } else {
-                                        2
-                                    };
+                                if lines.len() > 1 {
+                                    let up_count = (current_lines_drawn - 1)
+                                        .saturating_sub(1 + target_line_idx);
                                     if up_count > 0 {
                                         print!("\x1B[{}A", up_count);
                                     }
                                     print!("\x1B[{}G", 3 + target_col_idx);
                                 } else {
+                                    let up_count = if is_menu_active {
+                                        2 + matching_commands.len()
+                                    } else {
+                                        2
+                                    };
+                                    print!("\x1B[{}A", up_count);
                                     print!("\x1B[{}G", 3 + target_col_idx);
                                 }
                                 let _ = std::io::stdout().flush();
 
                                 prev_lines_drawn = current_lines_drawn;
                                 prev_target_line_idx = target_line_idx;
+                                prev_is_multiline = lines.len() > 1;
 
                                 // 3. Read and process key events
                                 match crossterm::event::read() {
@@ -4473,58 +4539,60 @@ pub async fn run(
                                                         input_buf = chars.into_iter().collect();
                                                         cursor_pos += 1;
                                                     } else {
-                                                        // Finalize: move cursor to the end line and print the completed prompt styled
+                                                        if is_menu_active {
+                                                            let selected_cmd =
+                                                                matching_commands[selected_cmd_idx];
+                                                            input_buf = selected_cmd.to_string();
+                                                            lines = vec![
+                                                                matching_commands[selected_cmd_idx],
+                                                            ];
+                                                        }
                                                         // Erase the lines drawn first
-                                                        if prev_lines_drawn > 1 {
-                                                            let up_to_top = if prev_lines_drawn == 3
-                                                            {
-                                                                0
-                                                            } else {
-                                                                1 + prev_target_line_idx
-                                                            };
-                                                            if up_to_top > 0 {
-                                                                print!("\x1B[{}A", up_to_top);
-                                                            }
-                                                        }
-                                                        for idx in 0..prev_lines_drawn {
-                                                            print!("\r\x1B[K");
-                                                            if idx < prev_lines_drawn - 1 {
-                                                                print!("\n");
-                                                            }
-                                                        }
-                                                        if prev_lines_drawn > 1 {
-                                                            print!(
-                                                                "\x1B[{}A",
-                                                                prev_lines_drawn - 1
-                                                            );
+                                                        let up_to_top = if prev_is_multiline {
+                                                            1 + prev_target_line_idx
                                                         } else {
-                                                            print!("\r\x1B[K");
+                                                            0
+                                                        };
+                                                        if up_to_top > 0 {
+                                                            print!("\x1B[{}A", up_to_top);
                                                         }
+                                                        print!("\r\x1B[J");
 
-                                                        if lines.len() > 1 {
-                                                            println!(
-                                                                "\x1B[1m\x1B[38;2;129;140;248m╭─\x1B[0m"
-                                                            );
-                                                            for line in &lines {
-                                                                println!(
-                                                                    "\x1B[1m\x1B[38;2;129;140;248m│ {}\x1B[0m",
-                                                                    line
-                                                                );
-                                                            }
-                                                            println!(
-                                                                "\x1B[1m\x1B[38;2;129;140;248m╰─\x1B[0m"
-                                                            );
-                                                        } else {
-                                                            println!(
-                                                                "\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m",
+                                                        let is_suspending = input_buf == "/model"
+                                                            || input_buf == "/models"
+                                                            || input_buf == "/clear"
+                                                            || input_buf == "/new"
+                                                            || input_buf == "/configure";
+
+                                                        if is_suspending {
+                                                            print!(
+                                                                "\r\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m\n",
                                                                 input_buf
                                                             );
-                                                            print!("\r");
-                                                            println!(
-                                                                "\x1B[38;2;139;92;246m{}\x1B[0m",
-                                                                separator
-                                                            );
-                                                            println!();
+                                                        } else {
+                                                            if lines.len() > 1 {
+                                                                print!(
+                                                                    "\r\x1B[1m\x1B[38;2;129;140;248m╭─\x1B[0m\n"
+                                                                );
+                                                                for line in &lines {
+                                                                    print!(
+                                                                        "\r\x1B[1m\x1B[38;2;129;140;248m│ {}\x1B[0m\n",
+                                                                        line
+                                                                    );
+                                                                }
+                                                                print!(
+                                                                    "\r\x1B[1m\x1B[38;2;129;140;248m╰─\x1B[0m\n"
+                                                                );
+                                                            } else {
+                                                                print!(
+                                                                    "\r\x1B[38;2;139;92;246m>\x1B[0m \x1B[1m\x1B[38;2;129;140;248m{}\x1B[0m\n",
+                                                                    input_buf
+                                                                );
+                                                                print!(
+                                                                    "\r\x1B[38;2;139;92;246m{}\x1B[0m\n\n",
+                                                                    separator
+                                                                );
+                                                            }
                                                         }
 
                                                         let _ = crossterm::execute!(
@@ -4537,7 +4605,13 @@ pub async fn run(
                                                     }
                                                 }
                                                 crossterm::event::KeyCode::Tab => {
-                                                    if !ghost_text.is_empty() {
+                                                    if is_menu_active {
+                                                        let selected_cmd =
+                                                            matching_commands[selected_cmd_idx];
+                                                        input_buf = selected_cmd.to_string();
+                                                        cursor_pos = input_buf.chars().count();
+                                                        selected_cmd_idx = 0;
+                                                    } else if !ghost_text.is_empty() {
                                                         input_buf.push_str(ghost_text);
                                                         cursor_pos = input_buf.chars().count();
                                                     }
@@ -4572,6 +4646,25 @@ pub async fn run(
                                                     }
                                                 }
                                                 // Left/Right arrow cursor movement
+                                                // Up/Down arrow selection
+                                                crossterm::event::KeyCode::Up => {
+                                                    if is_menu_active {
+                                                        if selected_cmd_idx > 0 {
+                                                            selected_cmd_idx -= 1;
+                                                        } else {
+                                                            selected_cmd_idx = menu_len - 1;
+                                                        }
+                                                    }
+                                                }
+                                                crossterm::event::KeyCode::Down => {
+                                                    if is_menu_active {
+                                                        if selected_cmd_idx < menu_len - 1 {
+                                                            selected_cmd_idx += 1;
+                                                        } else {
+                                                            selected_cmd_idx = 0;
+                                                        }
+                                                    }
+                                                }
                                                 crossterm::event::KeyCode::Left => {
                                                     cursor_pos = cursor_pos.saturating_sub(1);
                                                 }
@@ -4627,6 +4720,7 @@ pub async fn run(
                                                         input_buf = chars.into_iter().collect();
                                                         cursor_pos = cursor_pos.saturating_sub(1);
                                                     }
+                                                    selected_cmd_idx = 0;
                                                 }
                                                 crossterm::event::KeyCode::Delete => {
                                                     let chars_count = input_buf.chars().count();
@@ -4636,6 +4730,7 @@ pub async fn run(
                                                         chars.remove(cursor_pos);
                                                         input_buf = chars.into_iter().collect();
                                                     }
+                                                    selected_cmd_idx = 0;
                                                 }
                                                 // Delete word (Ctrl+W)
                                                 crossterm::event::KeyCode::Char('w')
@@ -4662,6 +4757,7 @@ pub async fn run(
                                                         cursor_pos = i;
                                                         input_buf = new_chars.into_iter().collect();
                                                     }
+                                                    selected_cmd_idx = 0;
                                                 }
                                                 crossterm::event::KeyCode::Char(c) => {
                                                     let mut chars: Vec<char> =
@@ -4673,31 +4769,11 @@ pub async fn run(
                                                     chars.insert(cursor_pos, c);
                                                     input_buf = chars.into_iter().collect();
                                                     cursor_pos += 1;
+                                                    selected_cmd_idx = 0;
                                                 }
                                                 crossterm::event::KeyCode::Esc => {
                                                     input_buf.clear();
                                                     cursor_pos = 0;
-                                                    if prev_lines_drawn > 1 {
-                                                        let up_to_top = if prev_lines_drawn == 3 {
-                                                            0
-                                                        } else {
-                                                            prev_lines_drawn - 1
-                                                        };
-                                                        if up_to_top > 0 {
-                                                            print!("\x1B[{}A", up_to_top);
-                                                        }
-                                                    }
-                                                    for idx in 0..prev_lines_drawn {
-                                                        print!("\r\x1B[K");
-                                                        if idx < prev_lines_drawn - 1 {
-                                                            print!("\n");
-                                                        }
-                                                    }
-                                                    if prev_lines_drawn > 1 {
-                                                        print!("\x1B[{}A", prev_lines_drawn - 1);
-                                                    }
-                                                    prev_lines_drawn = 1;
-                                                    let _ = std::io::stdout().flush();
                                                 }
                                                 _ => {}
                                             }
@@ -4757,7 +4833,7 @@ pub async fn run(
                         let command = parts[0];
                         if command == "/quit" || command == "/exit" {
                             break;
-                        } else if command == "/help" {
+                        } else if command == "/help" || command == "/commands" {
                             println!("{}", console::style("Available commands:").yellow().bold());
                             println!(
                                 "  {}             Show this help message",
@@ -4802,17 +4878,12 @@ pub async fn run(
                             continue;
                         } else if command == "/clear" || command == "/new" {
                             let confirm = if is_tui_active {
-                                let (_, h) = crossterm::terminal::size().unwrap_or((80, 24));
+                                let (_, _h) = crossterm::terminal::size().unwrap_or((80, 24));
                                 crate::agent::tui_events::TUI_SUSPENDED
                                     .store(true, std::sync::atomic::Ordering::SeqCst);
                                 emit_tui_event(crate::agent::tui_events::RuntimeEvent::Suspended);
-                                // Clear status line row (H-2), input (H-1), suggestions (H), and reset scroll region
-                                print!(
-                                    "\x1B[r\x1B[{};1H\x1B[K\x1B[{};1H\x1B[K\x1B[{};1H\x1B[K",
-                                    h.saturating_sub(2),
-                                    h.saturating_sub(1),
-                                    h
-                                );
+                                // Reset scroll region
+                                print!("\x1B[r");
                                 let _ = std::io::stdout().flush();
 
                                 println!(
@@ -5003,21 +5074,17 @@ pub async fn run(
                             items.push("Cancel".to_string());
 
                             use dialoguer::Select;
+                            let theme = get_dialoguer_theme();
                             let selection = if is_tui_active {
-                                let (_, h) = crossterm::terminal::size().unwrap_or((80, 24));
+                                let (_, _h) = crossterm::terminal::size().unwrap_or((80, 24));
                                 crate::agent::tui_events::TUI_SUSPENDED
                                     .store(true, std::sync::atomic::Ordering::SeqCst);
                                 emit_tui_event(crate::agent::tui_events::RuntimeEvent::Suspended);
-                                // Clear status line row (H-2), input (H-1), suggestions (H), and reset scroll region
-                                print!(
-                                    "\x1B[r\x1B[{};1H\x1B[K\x1B[{};1H\x1B[K\x1B[{};1H\x1B[K",
-                                    h.saturating_sub(2),
-                                    h.saturating_sub(1),
-                                    h
-                                );
+                                // Reset scroll region
+                                print!("\x1B[r");
                                 let _ = std::io::stdout().flush();
 
-                                let sel = Select::new()
+                                let sel = Select::with_theme(&theme)
                                     .with_prompt("Select active model")
                                     .items(&items)
                                     .default(0)
@@ -5037,7 +5104,7 @@ pub async fn run(
 
                                 sel
                             } else {
-                                Select::new()
+                                Select::with_theme(&theme)
                                     .with_prompt("Select active model")
                                     .items(&items)
                                     .default(0)
@@ -5154,17 +5221,12 @@ pub async fn run(
                         } else if command == "/configure" {
                             let mut config_mut = config.clone();
                             let wizard_res = if is_tui_active {
-                                let (_, h) = crossterm::terminal::size().unwrap_or((80, 24));
+                                let (_, _h) = crossterm::terminal::size().unwrap_or((80, 24));
                                 crate::agent::tui_events::TUI_SUSPENDED
                                     .store(true, std::sync::atomic::Ordering::SeqCst);
                                 emit_tui_event(crate::agent::tui_events::RuntimeEvent::Suspended);
-                                // Clear status line row (H-2), input (H-1), suggestions (H), and reset scroll region
-                                print!(
-                                    "\x1B[r\x1B[{};1H\x1B[K\x1B[{};1H\x1B[K\x1B[{};1H\x1B[K",
-                                    h.saturating_sub(2),
-                                    h.saturating_sub(1),
-                                    h
-                                );
+                                // Reset scroll region
+                                print!("\x1B[r");
                                 let _ = std::io::stdout().flush();
 
                                 let res = run_configure_wizard_inline(&mut config_mut).await;
@@ -6684,8 +6746,19 @@ pub async fn process_message(
         .await
 }
 
+fn get_dialoguer_theme() -> dialoguer::theme::ColorfulTheme {
+    let mut theme = dialoguer::theme::ColorfulTheme::default();
+    let purple = console::Style::new().color256(99).bold();
+    theme.active_item_style = purple;
+    theme.prompt_style = console::Style::new().white().bold();
+    theme.prompt_prefix = console::style("?".to_string()).white().bold();
+    theme.prompt_suffix = console::style("›".to_string()).white().bold();
+    theme
+}
+
 async fn run_configure_wizard_inline(config: &mut Config) -> Result<()> {
     use dialoguer::{Input, Password, Select};
+    let theme = get_dialoguer_theme();
 
     println!(
         "{}",
@@ -6708,14 +6781,14 @@ async fn run_configure_wizard_inline(config: &mut Config) -> Result<()> {
         "Other",
     ];
 
-    let selection = Select::new()
+    let selection = Select::with_theme(&theme)
         .with_prompt("Select AI Model Provider")
         .items(&providers)
         .default(0)
         .interact()?;
 
     let picked = if selection == providers.len() - 1 {
-        let custom: String = Input::new()
+        let custom: String = Input::with_theme(&theme)
             .with_prompt("Enter Custom Provider Name")
             .interact_text()?;
         custom.trim().to_lowercase()
@@ -6726,7 +6799,9 @@ async fn run_configure_wizard_inline(config: &mut Config) -> Result<()> {
     let needs_key = !matches!(picked.as_str(), "ollama" | "lmstudio");
 
     let api_key = if needs_key {
-        let key: String = Password::new().with_prompt("Enter API Key").interact()?;
+        let key: String = Password::with_theme(&theme)
+            .with_prompt("Enter API Key")
+            .interact()?;
         key.trim().to_string()
     } else {
         String::new()
@@ -6743,7 +6818,7 @@ async fn run_configure_wizard_inline(config: &mut Config) -> Result<()> {
         _ => "model-id",
     };
 
-    let model: String = Input::new()
+    let model: String = Input::with_theme(&theme)
         .with_prompt("Enter Model ID")
         .default(default_model.to_string())
         .interact_text()?;
