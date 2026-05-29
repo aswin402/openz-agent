@@ -292,8 +292,9 @@ fn print_openz_version() {
     );
     println!();
     println!(
-        "  {} v{}",
-        console::style("openz").bold(),
+        "  {}{} v{}",
+        console::style("open").white().bold(),
+        console::style("z").color256(208).bold(),
         env!("CARGO_PKG_VERSION")
     );
     println!(
