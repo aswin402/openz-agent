@@ -489,6 +489,22 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                         }
                     });
                     nested_set.push(quote! {
+                        if let Some((outer_key, inner_key, inner_name)) = crate::config::route_double_hashmap_path(
+                            name,
+                            Self::configurable_prefix(),
+                            #field_name_lit,
+                            <#inner_ty>::configurable_prefix(),
+                        ) {
+                            let outer_key = outer_key.to_string();
+                            let inner_key = inner_key.to_string();
+                            if let Some(inner_map) = self.#field_ident.get_mut(&outer_key) {
+                                if let Some(inner) = inner_map.get_mut(&inner_key) {
+                                    if let Ok(()) = inner.set_secret(&inner_name, value.clone()) {
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
                         for inner_map in self.#field_ident.values_mut() {
                             for inner in inner_map.values_mut() {
                                 if let Ok(()) = inner.set_secret(name, value.clone()) {
@@ -827,6 +843,20 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                         }
                     });
                     nested_set.push(quote! {
+                        if let Some((hm_key, inner_name)) = crate::config::route_hashmap_path(
+                            name,
+                            Self::configurable_prefix(),
+                            #field_name_lit,
+                            <#value_ty>::configurable_prefix(),
+                            self.#field_ident.keys().map(String::as_str),
+                        ) {
+                            let hm_key = hm_key.to_string();
+                            if let Some(inner) = self.#field_ident.get_mut(&hm_key) {
+                                if let Ok(()) = inner.set_secret(&inner_name, value.clone()) {
+                                    return Ok(());
+                                }
+                            }
+                        }
                         for inner in self.#field_ident.values_mut() {
                             if let Ok(()) = inner.set_secret(name, value.clone()) {
                                 return Ok(());

@@ -51,7 +51,6 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 const MAX_API_ERROR_CHARS: usize = 500;
-const MINIMAX_INTL_BASE_URL: &str = "https://api.minimax.io/v1";
 /// MiniMax-published OAuth client_id (same one their portal uses).
 /// Operators with a custom OAuth app override via
 /// `[model_providers.minimax.<alias>] oauth_client_id = "..."`.

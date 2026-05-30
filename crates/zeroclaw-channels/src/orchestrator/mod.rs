@@ -4767,13 +4767,31 @@ pub async fn bind_telegram_identity(config: &Config, identity: &str) -> Result<(
     // alias; a bare type would broaden the peer across every
     // telegram alias on the install.
     let group_name = "telegram_default".to_string();
+    let channel_ref_str = "telegram.default".to_string();
+    let matching_agents: Vec<String> = updated
+        .agents
+        .iter()
+        .filter(|(_, agent)| {
+            agent
+                .channels
+                .iter()
+                .any(|ch| ch.as_str() == channel_ref_str)
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
     let group = updated
         .peer_groups
         .entry(group_name.clone())
         .or_insert_with(|| PeerGroupConfig {
-            channel: "telegram.default".to_string(),
+            channel: channel_ref_str,
             ..PeerGroupConfig::default()
         });
+    for agent_name in matching_agents {
+        let alias = zeroclaw_config::multi_agent::AgentAlias::new(agent_name);
+        if !group.agents.contains(&alias) {
+            group.agents.push(alias);
+        }
+    }
 
     if group
         .external_peers

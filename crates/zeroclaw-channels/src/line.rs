@@ -190,13 +190,31 @@ async fn persist_line_paired_identity(state: &LineState, user_id: &str) -> anyho
         if !cfg.channels.line.contains_key(&state.alias) {
             anyhow::bail!("Missing [channels.line.{}] section", state.alias);
         }
+        let channel_ref_str = channel_ref.to_string();
+        let matching_agents: Vec<String> = cfg
+            .agents
+            .iter()
+            .filter(|(_, agent)| {
+                agent
+                    .channels
+                    .iter()
+                    .any(|ch| ch.as_str() == channel_ref_str)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
         let group = cfg
             .peer_groups
             .entry(group_name)
             .or_insert_with(|| PeerGroupConfig {
-                channel: channel_ref.to_string(),
+                channel: channel_ref_str,
                 ..PeerGroupConfig::default()
             });
+        for agent_name in matching_agents {
+            let alias = zeroclaw_config::multi_agent::AgentAlias::new(agent_name);
+            if !group.agents.contains(&alias) {
+                group.agents.push(alias);
+            }
+        }
         if group
             .external_peers
             .iter()

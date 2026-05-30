@@ -6833,7 +6833,7 @@ async fn run_configure_wizard_inline(config: &mut Config) -> Result<()> {
 
     let prefix = format!("providers.models.{picked}.{alias}");
     if !api_key.is_empty() {
-        config.set_secret_persistent(&format!("{prefix}.api_key"), api_key)?;
+        config.set_secret_persistent(&format!("{prefix}.api-key"), api_key)?;
     }
     config.set_prop_persistent(&format!("{prefix}.model"), &model)?;
 

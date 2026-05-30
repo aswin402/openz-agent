@@ -657,6 +657,12 @@ impl TelegramChannel {
                     self.alias
                 );
             }
+            let matching_agents: Vec<String> = cfg
+                .agents
+                .iter()
+                .filter(|(_, agent)| agent.channels.iter().any(|ch| ch.as_str() == channel_ref))
+                .map(|(name, _)| name.clone())
+                .collect();
             let group = cfg
                 .peer_groups
                 .entry(group_name)
@@ -664,6 +670,12 @@ impl TelegramChannel {
                     channel: channel_ref,
                     ..PeerGroupConfig::default()
                 });
+            for agent_name in matching_agents {
+                let alias = zeroclaw_config::multi_agent::AgentAlias::new(agent_name);
+                if !group.agents.contains(&alias) {
+                    group.agents.push(alias);
+                }
+            }
             if group
                 .external_peers
                 .iter()

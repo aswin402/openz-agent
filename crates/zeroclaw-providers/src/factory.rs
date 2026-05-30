@@ -573,10 +573,14 @@ impl FamilyProviderFactory for MinimaxModelProviderConfig {
             })
             .transpose()?;
         let resolved_key = refreshed_key.as_deref().or(key);
+        let base_url = api_url.map(String::from).unwrap_or_else(|| {
+            use zeroclaw_config::schema::ModelEndpoint;
+            self.endpoint.uri().to_string()
+        });
         let p = OpenAiCompatibleModelProvider::new_merge_system_into_user(
             alias,
             "MiniMax",
-            api_url.unwrap_or(crate::MINIMAX_INTL_BASE_URL),
+            &base_url,
             resolved_key,
             AuthStyle::Bearer,
         );

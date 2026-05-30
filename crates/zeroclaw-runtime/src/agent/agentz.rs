@@ -571,7 +571,10 @@ fn run_specialized_agent<'a>(
                     "subagent": agent_name,
                     "error": format!("{}", err)
                 })),
-            &format!("Subagent '{}' failed. Primary agent will execute the task itself.", agent_name)
+            &format!(
+                "Subagent '{}' failed. Primary agent will execute the task itself.",
+                agent_name
+            )
         );
 
         println!(
@@ -591,7 +594,12 @@ fn run_specialized_agent<'a>(
         } else if config.agents.contains_key("assistant") {
             "assistant"
         } else {
-            config.agents.keys().next().map(|s| s.as_str()).unwrap_or("assistant")
+            config
+                .agents
+                .keys()
+                .next()
+                .map(|s| s.as_str())
+                .unwrap_or("assistant")
         };
 
         let try_config = custom_config.clone();
@@ -616,8 +624,14 @@ fn run_specialized_agent<'a>(
 
         match tokio::time::timeout(timeout_duration, Box::pin(run_future)).await {
             Ok(Ok(res)) => Ok(res),
-            Ok(Err(e)) => Err(anyhow::anyhow!("Primary agent execution also failed: {:#}", e)),
-            Err(_) => Err(anyhow::anyhow!("Primary agent execution timed out after {:?}", timeout_duration)),
+            Ok(Err(e)) => Err(anyhow::anyhow!(
+                "Primary agent execution also failed: {:#}",
+                e
+            )),
+            Err(_) => Err(anyhow::anyhow!(
+                "Primary agent execution timed out after {:?}",
+                timeout_duration
+            )),
         }
     })
 }
