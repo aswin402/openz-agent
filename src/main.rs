@@ -739,7 +739,7 @@ fn get_recommended_model(subagent: &str, family: &str) -> &'static str {
             "groq" => "meta-llama/llama-4-scout-17b-16e-instruct",
             "deepseek" => "deepseek-chat",
             "ollama" => "minimax-m2.7",
-            "openrouter" => "anthropic/claude-3.5-sonnet",
+            "openrouter" => "openrouter/auto",
             "mistral" => "devstral-small-2507",
             "zai" | "z.ai" => "glm-4.7",
             "opencode" => "deepseek-v4-flash-free",
@@ -793,9 +793,11 @@ fn get_models_list_for_family(family: &str) -> Vec<&'static str> {
             "gpt-oss:120b",
         ],
         "openrouter" => vec![
-            "anthropic/claude-3.5-sonnet",
-            "google/gemini-flash-1.5",
-            "meta-llama/llama-3-8b-instruct",
+            "openrouter/auto",
+            "google/gemini-2.5-flash:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "deepseek/deepseek-r1:free",
+            "qwen/qwen-2.5-coder-32b-instruct:free",
         ],
         "lmstudio" => vec!["model-id"],
         "mistral" => vec![
