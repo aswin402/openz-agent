@@ -347,29 +347,14 @@ async fn main() -> Result<()> {
             eprintln!("Available agents: {}", available.join(", "));
             std::process::exit(1);
         }
-    } else if config.agents.is_empty() {
+    } else if config.agents.contains_key("assistant") {
+        "assistant".to_string()
+    } else if !config.agents.is_empty() {
+        config.agents.keys().next().unwrap().clone()
+    } else {
         println!("No agent configured yet. Let's run configuration first!");
         run_configure_wizard(&mut config).await?;
         "assistant".to_string()
-    } else if config.agents.len() == 1 {
-        config.agents.keys().next().unwrap().clone()
-    } else {
-        // If there are multiple agents, we prompt the user to choose
-        let mut agents: Vec<_> = config.agents.keys().cloned().collect();
-        agents.sort();
-
-        let mut theme = dialoguer::theme::ColorfulTheme::default();
-        let purple = console::Style::new().color256(99).bold();
-        theme.active_item_style = purple;
-        theme.prompt_style = console::Style::new().bold();
-
-        let selection = dialoguer::Select::with_theme(&theme)
-            .with_prompt("Select an agent to run")
-            .items(&agents)
-            .default(0)
-            .interact()?;
-
-        agents[selection].clone()
     };
 
     let final_temperature: Option<f64> = config
