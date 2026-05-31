@@ -215,7 +215,9 @@ pub fn fast_trim_tool_results(
     let mut saved = 0;
     let cutoff = history.len().saturating_sub(protect_last_n);
     for msg in &mut history[..cutoff] {
-        if msg.role == "tool" && msg.content.len() > trim_to {
+        let is_tool_msg = msg.role == "tool"
+            || (msg.role == "user" && msg.content.starts_with("[Tool results]"));
+        if is_tool_msg && msg.content.len() > trim_to {
             let original_len = msg.content.len();
             msg.content = truncate_tool_message(&msg.content, trim_to);
             saved += original_len - msg.content.len();
