@@ -675,79 +675,92 @@ fn get_configured_families(config: &Config) -> Vec<String> {
     families
 }
 
-fn get_recommended_model(subagent: &str, family: &str) -> &'static str {
-    match (subagent, family) {
-        // Coder recommendations
-        ("coder", "mistral") => "devstral-small-2507",
-        ("coder", "groq") => "meta-llama/llama-4-scout-17b-16e-instruct",
-        ("coder", "cerebras") => "gpt-oss-120b",
-        ("coder", "nvidia") => "qwen/qwen3-coder-480b-a35b-instruct",
+fn get_recommended_model(subagent: &str, family: &str, slot: usize) -> &'static str {
+    let full_recommendation = match (subagent, slot) {
+        // controller / assistant
+        ("assistant" | "controller" | "agentz", 0) => "minimax/MiniMax-M2.7",
 
-        // Reviewer recommendations
-        ("reviewer", "minimax") => "MiniMax-M2.7",
-        ("reviewer", "groq") => "qwen/qwen3-32b",
-        ("reviewer", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
-        ("reviewer", "nvidia") => "meta/llama-3.3-70b-instruct",
+        // vision-agent / agentz-vision
+        ("vision-agent" | "agentz-vision", 0) => "mistral/pixtral-12b",
+        ("vision-agent" | "agentz-vision", 1) => "nvidia/meta/llama-3.2-90b-vision-instruct",
+        ("vision-agent" | "agentz-vision", 2) => "nvidia/meta/llama-3.2-11b-vision-instruct",
+        ("vision-agent" | "agentz-vision", 3) => "openrouter/google/gemini-2.5-flash:free",
 
-        // Docs / Docs-agent recommendations
-        ("docs-agent" | "docs", "groq") => "llama-3.3-70b-versatile",
-        ("docs-agent" | "docs", "mistral") => "mistral-small-latest",
-        ("docs-agent" | "docs", "cerebras") => "gpt-oss-120b",
-        ("docs-agent" | "docs", "ollama") => "gemma4:31b",
+        // planner / openz-planagent
+        ("openz-planagent" | "planner", 0) => "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        ("openz-planagent" | "planner", 1) => "cerebras/qwen-3-235b-a22b-instruct-2507",
+        ("openz-planagent" | "planner", 2) => "ollama/minimax-m2.7",
+        ("openz-planagent" | "planner", 3) => "opencode/qwen3.6-plus-free",
 
-        // Vision-agent / agentz-vision recommendations
-        ("vision-agent" | "agentz-vision", "mistral") => "pixtral-12b",
-        ("vision-agent" | "agentz-vision", "nvidia") => "meta/llama-3.2-90b-vision-instruct",
-        ("vision-agent" | "agentz-vision", "gemini") => "gemini-2.5-flash",
+        // coder
+        ("coder", 0) => "mistral/devstral-small-2507",
+        ("coder", 1) => "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        ("coder", 2) => "cerebras/gpt-oss-120b",
+        ("coder", 3) => "nvidia/qwen/qwen3-coder-480b-a35b-instruct",
 
-        // Planner / openz-planagent recommendations
-        ("openz-planagent" | "planner", "groq") => "meta-llama/llama-4-scout-17b-16e-instruct",
-        ("openz-planagent" | "planner", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
-        ("openz-planagent" | "planner", "ollama") => "minimax-m2.7",
-        ("openz-planagent" | "planner", "opencode") => "qwen3.6-plus-free",
+        // tester
+        ("tester", 0) => "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        ("tester", 1) => "cerebras/llama3.1-8b",
+        ("tester", 2) => "mistral/codestral-latest",
+        ("tester", 3) => "opencode/qwen3.6-plus-free",
 
-        // Assistant / Controller / agentz recommendations
-        ("assistant" | "controller" | "agentz", "minimax") => "MiniMax-M2.7",
+        // reviewer
+        ("reviewer", 0) => "minimax/MiniMax-M2.7",
+        ("reviewer", 1) => "groq/qwen/qwen3-32b",
+        ("reviewer", 2) => "cerebras/qwen-3-235b-a22b-instruct-2507",
+        ("reviewer", 3) => "nvidia/meta/llama-3.3-70b-instruct",
 
-        // Tester recommendations
-        ("tester", "groq") => "meta-llama/llama-4-scout-17b-16e-instruct",
-        ("tester", "cerebras") => "llama3.1-8b",
-        ("tester", "mistral") => "codestral-latest",
-        ("tester", "opencode") => "qwen3.6-plus-free",
+        // security
+        ("security", 0) => "cerebras/qwen-3-235b-a22b-instruct-2507",
+        ("security", 1) => "groq/qwen/qwen3-32b",
+        ("security", 2) => "nvidia/meta/llama-guard-4-12b",
+        ("security", 3) => "groq/llama-3.3-70b-versatile",
 
-        // Security recommendations
-        ("security", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
-        ("security", "groq") => "qwen/qwen3-32b",
-        ("security", "nvidia") => "meta/llama-guard-4-12b",
+        // docs / docs-agent
+        ("docs-agent" | "docs", 0) => "groq/llama-3.3-70b-versatile",
+        ("docs-agent" | "docs", 1) => "mistral/mistral-small-latest",
+        ("docs-agent" | "docs", 2) => "cerebras/gpt-oss-120b",
+        ("docs-agent" | "docs", 3) => "ollama/gemma4:31b",
 
-        // Refactor recommendations
-        ("refactor", "mistral") => "devstral-medium-latest",
-        ("refactor", "groq") => "qwen/qwen3-32b",
-        ("refactor", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
-        ("refactor", "nvidia") => "qwen/qwen3.5-122b-a10b",
+        // refactor
+        ("refactor", 0) => "mistral/devstral-medium-latest",
+        ("refactor", 1) => "groq/qwen/qwen3-32b",
+        ("refactor", 2) => "cerebras/qwen-3-235b-a22b-instruct-2507",
+        ("refactor", 3) => "nvidia/qwen/qwen3.5-122b-a10b",
 
-        // Debugger recommendations
-        ("debugger", "groq") => "meta-llama/llama-4-scout-17b-16e-instruct",
-        ("debugger", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
-        ("debugger", "nvidia") => "deepseek-ai/deepseek-v4-flash",
+        // debugger
+        ("debugger", 0) => "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        ("debugger", 1) => "cerebras/qwen-3-235b-a22b-instruct-2507",
+        ("debugger", 2) => "nvidia/deepseek-ai/deepseek-v4-flash",
+        ("debugger", 3) => "groq/llama-3.3-70b-versatile",
 
-        // Defaults for families if not matched above
-        _ => match family {
-            "anthropic" => "claude-3-5-sonnet-20241022",
-            "openai" => "gpt-4o",
-            "gemini" => "gemini-2.5-flash",
-            "groq" => "meta-llama/llama-4-scout-17b-16e-instruct",
-            "deepseek" => "deepseek-chat",
-            "ollama" => "minimax-m2.7",
-            "openrouter" => "openrouter/auto",
-            "mistral" => "devstral-small-2507",
-            "zai" | "z.ai" => "glm-4.7",
-            "opencode" => "deepseek-v4-flash-free",
-            "cerebras" => "qwen-3-235b-a22b-instruct-2507",
-            "nvidia" => "qwen/qwen3-coder-480b-a35b-instruct",
-            "minimax" => "MiniMax-M2.7",
-            _ => "model-id",
-        },
+        _ => "",
+    };
+
+    if !full_recommendation.is_empty() {
+        if let Some((rec_fam, rec_model)) = full_recommendation.split_once('/') {
+            if rec_fam == family {
+                return rec_model;
+            }
+        }
+    }
+
+    // Default fallbacks if no specific mapping for (subagent, slot) matched
+    match family {
+        "anthropic" => "claude-3-5-sonnet-20241022",
+        "openai" => "gpt-4o",
+        "gemini" => "gemini-2.5-flash",
+        "groq" => "meta-llama/llama-4-scout-17b-16e-instruct",
+        "deepseek" => "deepseek-chat",
+        "ollama" => "minimax-m2.7",
+        "openrouter" => "openrouter/auto",
+        "mistral" => "devstral-small-2507",
+        "zai" | "z.ai" => "glm-4.7",
+        "opencode" => "deepseek-v4-flash-free",
+        "cerebras" => "qwen-3-235b-a22b-instruct-2507",
+        "nvidia" => "qwen/qwen3-coder-480b-a35b-instruct",
+        "minimax" => "MiniMax-M2.7",
+        _ => "model-id",
     }
 }
 
@@ -858,7 +871,7 @@ fn get_available_models_for_families(
 ) -> Vec<(String, String, String)> {
     let mut list = Vec::new();
     for family in families {
-        let recommended = get_recommended_model(subagent, family);
+        let recommended = get_recommended_model(subagent, family, 0);
         let models = get_models_list_for_family(family);
         for m in models {
             let label = if m == recommended {
@@ -1076,7 +1089,7 @@ async fn run_configure_models_submenu(
         };
 
         let family_models = get_models_list_for_family(&picked);
-        let recommended_model = get_recommended_model("assistant", &picked);
+        let recommended_model = get_recommended_model("assistant", &picked, 0);
         let mut model_options: Vec<String> = family_models
             .into_iter()
             .map(|m| {
@@ -1678,7 +1691,7 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
             match opt_sel {
                 0 => {
                     if let Some((family, model_id)) =
-                        select_subagent_model(subagent_name, config, &theme).await?
+                        select_subagent_model(subagent_name, config, &theme, 0).await?
                     {
                         let alias = format!("{}", subagent_name);
                         configure_subagent_provider_alias(config, &family, &alias, &model_id)?;
@@ -1693,7 +1706,7 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
                 }
                 1 => {
                     if let Some((family, model_id)) =
-                        select_subagent_model(subagent_name, config, &theme).await?
+                        select_subagent_model(subagent_name, config, &theme, 1).await?
                     {
                         let alias = format!("{}_fallback_1", subagent_name);
                         configure_subagent_provider_alias(config, &family, &alias, &model_id)?;
@@ -1709,7 +1722,7 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
                 }
                 2 => {
                     if let Some((family, model_id)) =
-                        select_subagent_model(subagent_name, config, &theme).await?
+                        select_subagent_model(subagent_name, config, &theme, 2).await?
                     {
                         let alias = format!("{}_fallback_2", subagent_name);
                         configure_subagent_provider_alias(config, &family, &alias, &model_id)?;
@@ -1724,7 +1737,7 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
                 }
                 3 => {
                     if let Some((family, model_id)) =
-                        select_subagent_model(subagent_name, config, &theme).await?
+                        select_subagent_model(subagent_name, config, &theme, 3).await?
                     {
                         let alias = format!("{}_fallback_3", subagent_name);
                         configure_subagent_provider_alias(config, &family, &alias, &model_id)?;
@@ -1813,6 +1826,7 @@ async fn select_subagent_model(
     subagent: &str,
     config: &Config,
     theme: &dialoguer::theme::ColorfulTheme,
+    slot: usize,
 ) -> Result<Option<(String, String)>> {
     use crossterm::{
         event::{self, Event, KeyCode, KeyModifiers},
@@ -1832,7 +1846,7 @@ async fn select_subagent_model(
     }
 
     let get_models_for_family = |fam: &str| -> Vec<(String, String)> {
-        let recommended = get_recommended_model(subagent, fam);
+        let recommended = get_recommended_model(subagent, fam, slot);
         let mut models: Vec<String> = get_models_list_for_family(fam)
             .into_iter()
             .map(|s| s.to_string())
