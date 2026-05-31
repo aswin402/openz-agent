@@ -1050,6 +1050,17 @@ impl McpTransportConn for SseTransport {
     }
 }
 
+impl Drop for SseTransport {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(task) = self.reader_task.take() {
+            task.abort();
+        }
+    }
+}
+
 // ── Factory ──────────────────────────────────────────────────────────────
 
 /// Create a transport based on config.
