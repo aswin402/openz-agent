@@ -1651,8 +1651,8 @@ impl DelegateTool {
                 None,
                 &zeroclaw_config::schema::PacingConfig::default(),
                 agent_config.strict_tool_parsing,
-                0,    // max_tool_result_chars: inherit from parent config in future
-                0,    // context_token_budget: 0 = disabled for subagents
+                agent_config.max_tool_result_chars,
+                agent_config.max_context_tokens,
                 None, // shared_budget: TODO thread from parent in future
                 None, // channel: delegate subagents don't support approval
                 receipt_generator,
