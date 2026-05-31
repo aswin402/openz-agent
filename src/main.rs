@@ -703,12 +703,79 @@ fn get_recommended_model(subagent: &str, family: &str) -> &'static str {
             "anthropic" => "claude-3-5-sonnet-20241022",
             "openai" => "gpt-4o",
             "gemini" => "gemini-1.5-pro",
-            "groq" => "llama3-70b-8192",
+            "groq" => "llama-3.3-70b-versatile",
             "deepseek" => "deepseek-chat",
             "ollama" => "llama3",
             "openrouter" => "anthropic/claude-3.5-sonnet",
+            "mistral" => "mistral-large-latest",
+            "zai" | "z.ai" => "zai-llama3-70b-instruct",
+            "opencode" => "opencode-zen-latest",
+            "cerebras" => "llama3.1-70b",
+            "nvidia" => "nvidia/llama-3.1-nemotron-70b-instruct",
             _ => "model-id",
         },
+    }
+}
+
+fn get_models_list_for_family(family: &str) -> Vec<&'static str> {
+    match family {
+        "anthropic" => vec![
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+            "claude-3-opus-20240229",
+        ],
+        "openai" => vec!["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"],
+        "gemini" => vec![
+            "gemini-1.5-pro",
+            "gemini-1.5-flash",
+            "gemini-2.0-flash-exp",
+            "gemini-2.0-flash",
+        ],
+        "groq" => vec![
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it",
+        ],
+        "deepseek" => vec!["deepseek-chat", "deepseek-coder"],
+        "ollama" => vec!["llama3", "mistral", "phi3"],
+        "openrouter" => vec![
+            "anthropic/claude-3.5-sonnet",
+            "google/gemini-flash-1.5",
+            "meta-llama/llama-3-8b-instruct",
+        ],
+        "lmstudio" => vec!["model-id"],
+        "mistral" => vec![
+            "mistral-large-latest",
+            "mistral-small-latest",
+            "codestral-latest",
+            "open-mistral-nemo",
+            "pixtral-12b",
+        ],
+        "z.ai" | "zai" => vec![
+            "zai-llama3-70b-instruct",
+            "zai-llama3-8b-instruct",
+            "zai-gemma2-9b-it",
+            "zai-mixtral-8x7b-instruct",
+        ],
+        "opencode" => vec![
+            "opencode-zen-latest",
+            "opencode-zen-coder-latest",
+        ],
+        "cerebras" => vec![
+            "llama3.1-8b",
+            "llama3.1-70b",
+        ],
+        "nvidia" => vec![
+            "meta/llama-3.1-405b-instruct",
+            "meta/llama-3.1-70b-instruct",
+            "meta/llama-3.1-8b-instruct",
+            "mistralai/mistral-large",
+            "nvidia/llama-3.1-nemotron-70b-instruct",
+        ],
+        _ => vec![],
     }
 }
 
@@ -719,25 +786,7 @@ fn get_available_models_for_families(
     let mut list = Vec::new();
     for family in families {
         let recommended = get_recommended_model(subagent, family);
-        let models = match family.as_str() {
-            "anthropic" => vec![
-                "claude-3-5-sonnet-20241022",
-                "claude-3-5-haiku-20241022",
-                "claude-3-opus-20240229",
-            ],
-            "openai" => vec!["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"],
-            "gemini" => vec!["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
-            "groq" => vec!["llama3-70b-8192", "llama3-8b-8192", "mixtral-8x7b-32768"],
-            "deepseek" => vec!["deepseek-chat", "deepseek-coder"],
-            "ollama" => vec!["llama3", "mistral", "phi3"],
-            "openrouter" => vec![
-                "anthropic/claude-3.5-sonnet",
-                "google/gemini-flash-1.5",
-                "meta-llama/llama-3-8b-instruct",
-            ],
-            "lmstudio" => vec!["model-id"],
-            _ => vec![],
-        };
+        let models = get_models_list_for_family(family);
         for m in models {
             let label = if m == recommended {
                 format!("{}: {} (Recommended)", family, m)
@@ -1712,25 +1761,10 @@ async fn select_subagent_model(
 
     let get_models_for_family = |fam: &str| -> Vec<(String, String)> {
         let recommended = get_recommended_model(subagent, fam);
-        let mut models = match fam {
-            "anthropic" => vec![
-                "claude-3-5-sonnet-20241022",
-                "claude-3-5-haiku-20241022",
-                "claude-3-opus-20240229",
-            ],
-            "openai" => vec!["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"],
-            "gemini" => vec!["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
-            "groq" => vec!["llama3-70b-8192", "llama3-8b-8192", "mixtral-8x7b-32768"],
-            "deepseek" => vec!["deepseek-chat", "deepseek-coder"],
-            "ollama" => vec!["llama3", "mistral", "phi3"],
-            "openrouter" => vec![
-                "anthropic/claude-3.5-sonnet",
-                "google/gemini-flash-1.5",
-                "meta-llama/llama-3-8b-instruct",
-            ],
-            "lmstudio" => vec!["model-id"],
-            _ => vec![],
-        };
+        let mut models: Vec<String> = get_models_list_for_family(fam)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
 
         let mut config_models = Vec::new();
         for (f, alias, base) in config.providers.models.iter_entries() {
@@ -1741,10 +1775,11 @@ async fn select_subagent_model(
             }
         }
         for cm in config_models {
-            if !models.contains(&cm) {
-                models.push(cm);
+            if !models.contains(&cm.to_string()) {
+                models.push(cm.to_string());
             }
         }
+        models.push("Custom Model ID".to_string());
 
         models
             .into_iter()
@@ -1964,6 +1999,16 @@ async fn select_subagent_model(
                                 if let Some(fam) = active_family {
                                     if selected_right_idx < right_models.len() {
                                         let (_, model_id) = &right_models[selected_right_idx];
+                                        if model_id == "Custom Model ID" {
+                                            let custom_id: String = dialoguer::Input::new()
+                                                .with_prompt(format!("Enter Custom Model ID for {}", fam))
+                                                .interact_text()?;
+                                            let model_id = custom_id.trim().to_string();
+                                            if model_id.is_empty() {
+                                                return Ok(None);
+                                            }
+                                            return Ok(Some((fam.clone(), model_id)));
+                                        }
                                         return Ok(Some((fam.clone(), model_id.clone())));
                                     }
                                 } else {
