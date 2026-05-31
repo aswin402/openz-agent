@@ -108,6 +108,20 @@ async fn main() -> Result<()> {
         // Ignore if already installed
     }
 
+    #[cfg(feature = "agent-runtime")]
+    {
+        zeroclaw_runtime::cron::scheduler::register_delivery_fn(Box::new(
+            |config, channel, target, thread_id, output| {
+                Box::pin(async move {
+                    zeroclaw_channels::orchestrator::deliver_announcement(
+                        &config, &channel, &target, thread_id, &output,
+                    )
+                    .await
+                })
+            },
+        ));
+    }
+
     let args = std::env::args().collect::<Vec<String>>();
 
     // Check if --help or -h was passed anywhere
@@ -387,21 +401,62 @@ async fn main() -> Result<()> {
     };
 
     // Run the agent loop
+    #[cfg(feature = "agent-runtime")]
+    let bg_daemon = {
+        if config.gateway.gateway_mode == "cli" {
+            println!("\x1B[1m\x1B[38;2;139;92;246msetting up gateway...\x1B[0m");
+            zeroclaw_tools::mcp_client::set_silent_mcp(true);
+            let handle = maybe_start_background_daemon(&config);
+            
+            // Dynamically wait for the gateway to start listening on its configured port
+            let host = &config.gateway.host;
+            let port = config.gateway.port;
+            let addr = format!("{}:{}", host, port);
+            let start_time = std::time::Instant::now();
+            while start_time.elapsed().as_secs() < 15 {
+                if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            
+            // Allow a small extra delay for any trailing log prints from channels/supervisors
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            
+            println!("\x1B[1m\x1B[38;2;139;92;246msuccessfully started gateway...\x1B[0m");
+            
+            // Connect to MCP servers once in the main thread to show clean startup sequence
+            zeroclaw_tools::mcp_client::set_silent_mcp(false);
+            if config.mcp.enabled && !config.mcp.servers.is_empty() {
+                let _ = zeroclaw_tools::mcp_client::McpRegistry::connect_all(&config.mcp.servers, false).await;
+            }
+            zeroclaw_tools::mcp_client::set_silent_mcp(true);
+            
+            handle
+        } else {
+            maybe_start_background_daemon(&config)
+        }
+    };
+    #[cfg(not(feature = "agent-runtime"))]
+    let bg_daemon: Option<tokio::task::JoinHandle<Result<()>>> = None;
+
     use std::io::IsTerminal;
-    if std::io::stdout().is_terminal() {
+    let result = if std::io::stdout().is_terminal() {
         let system_prompt = "You are a helpful AI assistant.".to_string();
         let app = crate::tui::app::TuiApp::new(
-            config,
+            config.clone(),
             agent_alias,
             session_state_file,
             system_prompt,
             final_temperature,
-        )?;
-        app.run_loop().await?;
-        Ok(())
+        );
+        match app {
+            Ok(app) => app.run_loop().await,
+            Err(e) => Err(e),
+        }
     } else {
         Box::pin(zeroclaw_runtime::agent::run(
-            config,
+            config.clone(),
             &agent_alias,
             None, // message
             None, // provider override
@@ -415,6 +470,33 @@ async fn main() -> Result<()> {
         ))
         .await
         .map(|_| ())
+    };
+
+    #[cfg(feature = "agent-runtime")]
+    {
+        if let Some(handle) = bg_daemon {
+            zeroclaw_runtime::daemon::get_shutdown_token().cancel();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+            println!("already we have byee..");
+            println!("gateways stopped");
+        } else if let Err(ref e) = result {
+            if e.to_string() == "Interrupted" {
+                println!("ok byee....");
+            }
+        }
+    }
+    #[cfg(not(feature = "agent-runtime"))]
+    {
+        if let Err(ref e) = result {
+            if e.to_string() == "Interrupted" {
+                println!("ok byee....");
+            }
+        }
+    }
+
+    match result {
+        Err(ref e) if e.to_string() == "Interrupted" => Ok(()),
+        other => other,
     }
 }
 
@@ -429,53 +511,54 @@ fn print_openz_help() {
     );
     println!();
     println!("{}", console::style("Usage:").yellow().bold());
-    println!("  openz                   Run the agent in TUI/CLI interactive mode");
-    println!("  openz --help, -h        Show this help message");
-    println!("  openz version           Show logo, version, and description");
-    println!("  openz configure         Run the minimal configuration wizard");
-    println!("  openz mcp-setup         Configure API keys for MCP servers");
-    println!("  openz agent-setup       Configure and add a new subagent");
-    println!("  openz logs              View full runtime logs");
-    println!("  openz hands             Manage task blueprints and self-evolution");
-    println!("  openz daemon            Start the background daemon (gateway + channels)");
-    println!("  openz service           Manage the background system service");
-    println!("  openz channel           Manage messaging channels");
-    println!("  openz cron              Manage background scheduled tasks");
-    println!("  openz memory            Manage agent memory database");
+    println!("  openz [OPTIONS] [SUBCOMMAND]");
+    println!();
+    println!("{}", console::style("Options:").yellow().bold());
+    println!(
+        "  -a, --agent <AGENT>     Specify the agent alias to run (e.g. brain, planner, analysis, vision)"
+    );
+    println!("  -h, --help              Show this help message");
+    println!("  -V, --version           Show logo, version, and description");
+    println!();
+    println!("{}", console::style("Subcommands:").yellow().bold());
+    println!("  version                 Show version, logo, and description");
+    println!("  configure [mode]        Run the configuration wizard (mode: e.g. subagents)");
+    println!("  mcp-setup               Configure API keys for MCP servers");
+    println!("  agent-setup             Configure and add a new subagent");
+    println!(
+        "  logs [--verify]         View logs (pass --verify to cryptographically check integrity)"
+    );
+    println!(
+        "  hands <SUBCOMMAND>      Manage task blueprints (list, bind, evolve, optimize-prompt)"
+    );
+    println!("  daemon [OPTIONS]        Start daemon (options: --host <HOST>, -p, --port <PORT>)");
+    println!(
+        "  service <SUBCOMMAND>    Manage background system service (install, start, stop, restart, status, uninstall, logs)"
+    );
+    println!("  channel <SUBCOMMAND>    Manage channels (list, start, doctor, add, remove)");
+    println!(
+        "  cron <SUBCOMMAND>       Manage recurring/one-shot cron tasks (list, add, add-at, once, remove, update, pause, resume)"
+    );
+    println!("  memory <SUBCOMMAND>     Manage memory DB (list, get, stats, clear, reindex)");
     println!();
 }
 
 fn print_openz_version() {
-    println!(
-        "{}",
-        console::style("  ___  ____  _____ _   _ _____")
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        console::style(" / _ \\|  _ \\| ____| \\ | |__  /")
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        console::style("| | | | |_) |  _| |  \\| | / / ")
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        console::style("| |_| |  __/| |___| |\\  |/ /_ ")
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        console::style(" \\___/|_|   |_____|_| \\_/____|")
-            .cyan()
-            .bold()
-    );
+    let logo = [
+        ("  ___  ____  _____ _   _ ", "_____"),
+        (" / _ \\|  _ \\| ____| \\ | |", "__  /"),
+        ("| | | | |_) |  _| |  \\| |", " / / "),
+        ("| |_| |  __/| |___| |\\  |", "/ /_ "),
+        (" \\___/|_|   |_____|_| \\_/", "____|"),
+    ];
+
+    for (open, z) in logo {
+        println!(
+            "{}{}",
+            console::style(open).white().bold(),
+            console::style(z).color256(208).bold()
+        );
+    }
     println!();
     println!(
         "  {}{} v{}",
@@ -697,6 +780,7 @@ async fn run_configure_wizard(config: &mut Config) -> Result<()> {
         let choices = vec![
             "models - Configure AI Models & Providers",
             "telegram - Configure Telegram Integration",
+            "gateway - Configure Gateway Startup Mode",
             "exit - Exit Configuration Setup",
         ];
 
@@ -713,11 +797,14 @@ async fn run_configure_wizard(config: &mut Config) -> Result<()> {
             1 => {
                 run_configure_telegram(config).await?;
             }
+            2 => {
+                run_configure_gateway_mode(config).await?;
+            }
             _ => {
                 config.save_dirty().await?;
                 println!(
                     "{}",
-                    console::style("✓ Configuration successfully saved!")
+                    console::style("✔ Configuration successfully saved!")
                         .green()
                         .bold()
                 );
@@ -726,6 +813,61 @@ async fn run_configure_wizard(config: &mut Config) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn run_configure_gateway_mode(config: &mut Config) -> Result<()> {
+    println!();
+    println!(
+        "{}",
+        console::style("=== OpenZ Gateway Mode Configuration ===")
+            .cyan()
+            .bold()
+    );
+
+    let theme = get_clean_theme();
+    let choices = vec![
+        "gateway starts when computer turns on",
+        "gateway starts when openz cli starts",
+        "exit",
+    ];
+
+    let selection = dialoguer::Select::with_theme(&theme)
+        .with_prompt("Select gateway startup mode")
+        .items(&choices)
+        .default(0)
+        .interact()?;
+
+    match selection {
+        0 => {
+            config.set_prop_persistent("gateway.gateway-mode", "boot")?;
+            #[cfg(feature = "agent-runtime")]
+            {
+                let init_system = zeroclaw_runtime::service::InitSystem::Auto;
+                let _ = zeroclaw_runtime::service::install(config, init_system);
+            }
+            println!(
+                "{}",
+                console::style("✔ Gateway configured to start when computer turns on (boot service installed & enabled).").green().bold()
+            );
+        }
+        1 => {
+            config.set_prop_persistent("gateway.gateway-mode", "cli")?;
+            #[cfg(feature = "agent-runtime")]
+            {
+                let init_system = zeroclaw_runtime::service::InitSystem::Auto;
+                let _ = zeroclaw_runtime::service::uninstall(config, init_system);
+            }
+            println!(
+                "{}",
+                console::style("✔ Gateway configured to start when OpenZ CLI starts.")
+                    .green()
+                    .bold()
+            );
+        }
+        _ => {}
+    }
+    println!();
     Ok(())
 }
 
@@ -1551,6 +1693,12 @@ async fn select_subagent_model(
     config: &Config,
     theme: &dialoguer::theme::ColorfulTheme,
 ) -> Result<Option<(String, String)>> {
+    use crossterm::{
+        event::{self, Event, KeyCode, KeyModifiers},
+        terminal::{disable_raw_mode, enable_raw_mode},
+    };
+    use std::io::Write;
+
     let configured_families = get_configured_families(config);
     if configured_families.is_empty() {
         println!(
@@ -1562,42 +1710,309 @@ async fn select_subagent_model(
         return Ok(None);
     }
 
-    let model_options = get_available_models_for_families(subagent, &configured_families);
-    if model_options.is_empty() {
-        return Ok(None);
+    let get_models_for_family = |fam: &str| -> Vec<(String, String)> {
+        let recommended = get_recommended_model(subagent, fam);
+        let mut models = match fam {
+            "anthropic" => vec![
+                "claude-3-5-sonnet-20241022",
+                "claude-3-5-haiku-20241022",
+                "claude-3-opus-20240229",
+            ],
+            "openai" => vec!["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"],
+            "gemini" => vec!["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
+            "groq" => vec!["llama3-70b-8192", "llama3-8b-8192", "mixtral-8x7b-32768"],
+            "deepseek" => vec!["deepseek-chat", "deepseek-coder"],
+            "ollama" => vec!["llama3", "mistral", "phi3"],
+            "openrouter" => vec![
+                "anthropic/claude-3.5-sonnet",
+                "google/gemini-flash-1.5",
+                "meta-llama/llama-3-8b-instruct",
+            ],
+            "lmstudio" => vec!["model-id"],
+            _ => vec![],
+        };
+
+        let mut config_models = Vec::new();
+        for (f, alias, base) in config.providers.models.iter_entries() {
+            if f == fam {
+                if let Some(ref m) = base.model {
+                    config_models.push(m.as_str());
+                }
+            }
+        }
+        for cm in config_models {
+            if !models.contains(&cm) {
+                models.push(cm);
+            }
+        }
+
+        models
+            .into_iter()
+            .map(|m| {
+                let label = if m == recommended {
+                    format!("{} (Recommended)", m)
+                } else {
+                    m.to_string()
+                };
+                (label, m.to_string())
+            })
+            .collect::<Vec<_>>()
+    };
+
+    #[derive(PartialEq, Clone, Copy)]
+    enum Focus {
+        Left,
+        Right,
     }
 
-    let mut select_items: Vec<String> = model_options
-        .iter()
-        .map(|(label, _, _)| label.clone())
-        .collect();
-    select_items.push("Custom Model ID".to_string());
+    let mut selected_left_idx = 0;
+    let mut selected_right_idx = 0;
+    let mut focus = Focus::Left;
+    let mut prev_lines_drawn = 0;
+    let mut needs_redraw = true;
 
-    let selection = Select::with_theme(theme)
-        .with_prompt("Select model")
-        .items(&select_items)
-        .default(0)
-        .interact()?;
+    enable_raw_mode().context("Failed to enable raw mode for subagent model selector")?;
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(b"\x1B[?25l");
+    let _ = stdout.flush();
 
-    if selection == select_items.len() - 1 {
-        let family_idx = Select::with_theme(theme)
-            .with_prompt("Select Provider Family")
-            .items(&configured_families)
-            .default(0)
-            .interact()?;
-        let family = configured_families[family_idx].clone();
+    loop {
+        let active_family = if selected_left_idx < configured_families.len() {
+            Some(&configured_families[selected_left_idx])
+        } else {
+            None
+        };
 
-        let custom_id: String = dialoguer::Input::new()
-            .with_prompt("Enter Custom Model ID")
-            .interact_text()?;
-        let model_id = custom_id.trim().to_string();
-        if model_id.is_empty() {
-            return Ok(None);
+        let right_models = if let Some(fam) = active_family {
+            get_models_for_family(fam)
+        } else {
+            Vec::new()
+        };
+
+        if needs_redraw {
+            if prev_lines_drawn > 0 {
+                for _ in 0..prev_lines_drawn {
+                    print!("\x1B[1A\x1B[K");
+                }
+                let _ = stdout.flush();
+            }
+
+            let mut lines_drawn = 0;
+            println!(
+                "\r\x1B[K{}",
+                console::style(format!(
+                    "✔ Select model for {} (Use Left/Right to switch panel, Up/Down to navigate, Esc/Ctrl+C to cancel)",
+                    subagent
+                ))
+                .bold()
+                .magenta()
+            );
+            lines_drawn += 1;
+
+            let max_rows = std::cmp::max(configured_families.len() + 1, right_models.len());
+            for i in 0..max_rows {
+                let mut left_str = String::new();
+                if i < configured_families.len() {
+                    let fam = &configured_families[i];
+                    if i == selected_left_idx {
+                        if focus == Focus::Left {
+                            left_str = format!(" ❯ \x1B[1m\x1B[38;2;139;92;246m{}\x1B[0m", fam);
+                        } else {
+                            left_str = format!("   \x1B[1m\x1B[38;2;113;113;122m{} (active)\x1B[0m", fam);
+                        }
+                    } else {
+                        left_str = format!("   {}", fam);
+                    }
+                } else if i == configured_families.len() {
+                    if i == selected_left_idx {
+                        if focus == Focus::Left {
+                            left_str = format!(" ❯ \x1B[1m\x1B[38;2;139;92;246mCustom Model ID\x1B[0m");
+                        } else {
+                            left_str = format!("   \x1B[1m\x1B[38;2;113;113;122mCustom Model ID (active)\x1B[0m");
+                        }
+                    } else {
+                        left_str = format!("   Custom Model ID");
+                    }
+                }
+
+                let mut right_str = String::new();
+                if active_family.is_some() {
+                    if i < right_models.len() {
+                        let (label, _) = &right_models[i];
+                        if i == selected_right_idx && focus == Focus::Right {
+                            right_str = format!(" ❯ \x1B[1m\x1B[38;2;249;115;22m{}\x1B[0m", label);
+                        } else {
+                            right_str = format!("   {}", label);
+                        }
+                    }
+                } else {
+                    if i == 0 {
+                        if focus == Focus::Right {
+                            right_str = " ❯ \x1B[1m\x1B[38;2;249;115;22m[Input Custom Model ID]\x1B[0m".to_string();
+                        } else {
+                            right_str = "   [Input Custom Model ID]".to_string();
+                        }
+                    }
+                }
+
+                let raw_left_text = if i < configured_families.len() {
+                    if i == selected_left_idx && focus == Focus::Right {
+                        format!("   {} (active)", configured_families[i])
+                    } else if i == selected_left_idx && focus == Focus::Left {
+                        format!(" ❯ {}", configured_families[i])
+                    } else {
+                        format!("   {}", configured_families[i])
+                    }
+                } else if i == configured_families.len() {
+                    if i == selected_left_idx && focus == Focus::Right {
+                        "   Custom Model ID (active)".to_string()
+                    } else if i == selected_left_idx && focus == Focus::Left {
+                        " ❯ Custom Model ID".to_string()
+                    } else {
+                        "   Custom Model ID".to_string()
+                    }
+                } else {
+                    "".to_string()
+                };
+
+                let pad = 35;
+                let spaces = if pad > raw_left_text.len() {
+                    " ".repeat(pad - raw_left_text.len())
+                } else {
+                    " ".to_string()
+                };
+
+                println!("\r\x1B[K{}{} │ {}", left_str, spaces, right_str);
+                lines_drawn += 1;
+            }
+
+            prev_lines_drawn = lines_drawn;
+            let _ = stdout.flush();
+            needs_redraw = false;
         }
-        Ok(Some((family, model_id)))
-    } else {
-        let (_, family, model_id) = &model_options[selection];
-        Ok(Some((family.clone(), model_id.clone())))
+
+        match event::read()? {
+            Event::Key(key_event) => {
+                if key_event.kind == event::KeyEventKind::Press {
+                    match key_event.code {
+                        KeyCode::Up => {
+                            if focus == Focus::Left {
+                                if selected_left_idx > 0 {
+                                    selected_left_idx -= 1;
+                                    selected_right_idx = 0;
+                                    needs_redraw = true;
+                                }
+                            } else {
+                                if selected_right_idx > 0 {
+                                    selected_right_idx -= 1;
+                                    needs_redraw = true;
+                                }
+                            }
+                        }
+                        KeyCode::Down => {
+                            if focus == Focus::Left {
+                                if selected_left_idx < configured_families.len() {
+                                    selected_left_idx += 1;
+                                    selected_right_idx = 0;
+                                    needs_redraw = true;
+                                }
+                            } else {
+                                let max_r = if active_family.is_some() { right_models.len() } else { 1 };
+                                if max_r > 0 && selected_right_idx < max_r - 1 {
+                                    selected_right_idx += 1;
+                                    needs_redraw = true;
+                                }
+                            }
+                        }
+                        KeyCode::Left => {
+                            if focus == Focus::Right {
+                                focus = Focus::Left;
+                                selected_right_idx = 0;
+                                needs_redraw = true;
+                            } else {
+                                for _ in 0..prev_lines_drawn {
+                                    print!("\x1B[1A\x1B[K");
+                                }
+                                let _ = stdout.flush();
+                                let _ = stdout.write_all(b"\x1B[?25h");
+                                let _ = stdout.flush();
+                                let _ = disable_raw_mode();
+                                return Ok(None);
+                            }
+                        }
+                        KeyCode::Right => {
+                            if focus == Focus::Left {
+                                focus = Focus::Right;
+                                selected_right_idx = 0;
+                                needs_redraw = true;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if focus == Focus::Left {
+                                focus = Focus::Right;
+                                selected_right_idx = 0;
+                                needs_redraw = true;
+                            } else {
+                                for _ in 0..prev_lines_drawn {
+                                    print!("\x1B[1A\x1B[K");
+                                }
+                                let _ = stdout.flush();
+                                let _ = stdout.write_all(b"\x1B[?25h");
+                                let _ = stdout.flush();
+                                let _ = disable_raw_mode();
+
+                                if let Some(fam) = active_family {
+                                    if selected_right_idx < right_models.len() {
+                                        let (_, model_id) = &right_models[selected_right_idx];
+                                        return Ok(Some((fam.clone(), model_id.clone())));
+                                    }
+                                } else {
+                                    let family_idx = Select::with_theme(theme)
+                                        .with_prompt("Select Provider Family")
+                                        .items(&configured_families)
+                                        .default(0)
+                                        .interact()?;
+                                    let family = configured_families[family_idx].clone();
+
+                                    let custom_id: String = dialoguer::Input::new()
+                                        .with_prompt("Enter Custom Model ID")
+                                        .interact_text()?;
+                                    let model_id = custom_id.trim().to_string();
+                                    if model_id.is_empty() {
+                                        return Ok(None);
+                                    }
+                                    return Ok(Some((family, model_id)));
+                                }
+                            }
+                        }
+                        KeyCode::Char('c')
+                            if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            for _ in 0..prev_lines_drawn {
+                                print!("\x1B[1A\x1B[K");
+                            }
+                            let _ = stdout.flush();
+                            let _ = stdout.write_all(b"\x1B[?25h");
+                            let _ = stdout.flush();
+                            let _ = disable_raw_mode();
+                            return Err(anyhow::anyhow!("Interrupted"));
+                        }
+                        KeyCode::Esc => {
+                            for _ in 0..prev_lines_drawn {
+                                print!("\x1B[1A\x1B[K");
+                            }
+                            let _ = stdout.flush();
+                            let _ = stdout.write_all(b"\x1B[?25h");
+                            let _ = stdout.flush();
+                            let _ = disable_raw_mode();
+                            return Ok(None);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -2059,8 +2474,7 @@ fn interactive_session_picker(
                             let _ = stdout.write_all(b"\x1B[?25h");
                             let _ = stdout.flush();
                             let _ = disable_raw_mode();
-                            println!("ok byee....");
-                            std::process::exit(130);
+                            return Err(anyhow::anyhow!("Interrupted"));
                         }
                         KeyCode::Esc => {
                             if prev_lines_drawn > 0 {
@@ -2352,4 +2766,76 @@ async fn run_agent_setup_wizard(config: &mut Config) -> Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(feature = "agent-runtime")]
+fn maybe_start_background_daemon(config: &Config) -> Option<tokio::task::JoinHandle<Result<()>>> {
+    if config.gateway.gateway_mode != "cli" {
+        return None;
+    }
+    let config = config.clone();
+    let host = config.gateway.host.clone();
+    let port = config.gateway.port;
+
+    let handle = tokio::spawn(async move {
+        let canvas_store = zeroclaw_runtime::tools::CanvasStore::new();
+        let canvas_store_for_gateway = canvas_store.clone();
+        let canvas_store_for_channels = canvas_store.clone();
+
+        let subsystems = zeroclaw_runtime::daemon::DaemonSubsystems {
+            #[cfg(feature = "gateway")]
+            gateway_start: Some(Box::new(move |host, port, config, tx, reload_tx| {
+                let canvas_store = canvas_store_for_gateway.clone();
+                Box::pin(async move {
+                    Box::pin(zeroclaw_gateway::run_gateway(
+                        &host,
+                        port,
+                        config,
+                        tx,
+                        reload_tx,
+                        Some(canvas_store),
+                    ))
+                    .await
+                })
+            })),
+            #[cfg(not(feature = "gateway"))]
+            gateway_start: None,
+
+            channels_start: Some(Box::new(move |config, cancel| {
+                let canvas_store = canvas_store_for_channels.clone();
+                Box::pin(async move {
+                    Box::pin(zeroclaw_channels::orchestrator::start_channels(
+                        config,
+                        Some(canvas_store),
+                        cancel,
+                    ))
+                    .await
+                })
+            })),
+
+            mqtt_start: Some(Box::new(|mqtt_config| {
+                Box::pin(async move {
+                    use std::sync::{Arc, Mutex};
+                    use zeroclaw_config::schema::SopConfig;
+                    use zeroclaw_memory::NoneMemory;
+                    use zeroclaw_runtime::sop::{SopAuditLogger, SopEngine};
+
+                    let engine = Arc::new(Mutex::new(SopEngine::new(SopConfig::default())));
+                    let audit = Arc::new(SopAuditLogger::new(Arc::new(NoneMemory::default())));
+                    zeroclaw_channels::orchestrator::mqtt::run_mqtt_sop_listener(
+                        &mqtt_config,
+                        engine,
+                        audit,
+                    )
+                    .await
+                })
+            })),
+        };
+
+        zeroclaw_runtime::daemon::run(config, host, port, subsystems)
+            .await
+            .map(|_| ())
+    });
+
+    Some(handle)
 }

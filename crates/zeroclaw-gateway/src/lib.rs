@@ -680,7 +680,7 @@ pub async fn run_gateway(
                 config.mcp.servers.len()
             )
         );
-        match tools::McpRegistry::connect_all(&config.mcp.servers).await {
+        match tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
             Ok(registry) => {
                 let registry = std::sync::Arc::new(registry);
                 if config.mcp.deferred_loading {
@@ -1090,57 +1090,70 @@ pub async fn run_gateway(
     }
 
     let pfx = path_prefix.unwrap_or("");
-    println!("🦀 ZeroClaw Gateway listening on http://{display_addr}{pfx}");
-    if let Some(ref url) = tunnel_url {
-        println!("  🌐 Public URL: {url}");
-    }
-    println!("  🌐 Web Dashboard: http://{display_addr}{pfx}/");
-    if let Some(code) = pairing.pairing_code() {
-        println!();
-        println!("  🔐 PAIRING REQUIRED — use this one-time code:");
-        println!("     ┌──────────────┐");
-        println!("     │  {code}  │");
-        println!("     └──────────────┘");
-        println!("     Send: POST {pfx}/pair with header X-Pairing-Code: {code}");
-    } else if pairing.require_pairing() {
-        println!("  🔒 Pairing: ACTIVE (bearer token required)");
-        println!(
-            "     To pair a new device: {}",
-            format_paircode_recovery_command(host, actual_port)
-        );
-        println!(
-            "     Fallback: {}",
-            format_paircode_recovery_curl(host, actual_port, pfx)
-        );
+    let is_cli = config.gateway.gateway_mode == "cli";
+    if is_cli {
+        println!("\x1B[1m\x1B[38;2;139;92;246mopenz gateway\x1B[0m     http://{display_addr}{pfx}");
+        println!("\x1B[1m\x1B[38;2;139;92;246mdashboard\x1B[0m         http://{display_addr}{pfx}/");
+        if let Some(code) = pairing.pairing_code() {
+            println!();
+            println!("\x1B[1m\x1B[38;2;139;92;246mpair code\x1B[0m");
+            println!();
+            println!("  \x1B[1m{code}\x1B[0m");
+        }
         println!();
     } else {
-        println!("  ⚠️  Pairing: DISABLED (all requests accepted)");
-        println!();
+        println!("🦀 ZeroClaw Gateway listening on http://{display_addr}{pfx}");
+        if let Some(ref url) = tunnel_url {
+            println!("  🌐 Public URL: {url}");
+        }
+        println!("  🌐 Web Dashboard: http://{display_addr}{pfx}/");
+        if let Some(code) = pairing.pairing_code() {
+            println!();
+            println!("  🔐 PAIRING REQUIRED — use this one-time code:");
+            println!("     ┌──────────────┐");
+            println!("     │  {code}  │");
+            println!("     └──────────────┘");
+            println!("     Send: POST {pfx}/pair with header X-Pairing-Code: {code}");
+        } else if pairing.require_pairing() {
+            println!("  🔒 Pairing: ACTIVE (bearer token required)");
+            println!(
+                "     To pair a new device: {}",
+                format_paircode_recovery_command(host, actual_port)
+            );
+            println!(
+                "     Fallback: {}",
+                format_paircode_recovery_curl(host, actual_port, pfx)
+            );
+            println!();
+        } else {
+            println!("  ⚠️  Pairing: DISABLED (all requests accepted)");
+            println!();
+        }
+        println!("  POST {pfx}/pair      — pair a new client (X-Pairing-Code header)");
+        println!("  POST {pfx}/webhook   — {{\"message\": \"your prompt\"}}");
+        if whatsapp_channel.is_some() {
+            println!("  GET  {pfx}/whatsapp  — Meta webhook verification");
+            println!("  POST {pfx}/whatsapp  — WhatsApp message webhook");
+        }
+        if linq_channel.is_some() {
+            println!("  POST {pfx}/linq      — Linq message webhook (iMessage/RCS/SMS)");
+        }
+        if wati_channel.is_some() {
+            println!("  GET  {pfx}/wati      — WATI webhook verification");
+            println!("  POST {pfx}/wati      — WATI message webhook");
+        }
+        if nextcloud_talk_channel.is_some() {
+            println!("  POST {pfx}/nextcloud-talk — Nextcloud Talk bot webhook");
+        }
+        println!("  GET  {pfx}/api/*     — REST API (bearer token required)");
+        println!("  GET  {pfx}/ws/chat   — WebSocket agent chat");
+        if config.nodes.enabled {
+            println!("  GET  {pfx}/ws/nodes  — WebSocket node discovery");
+        }
+        println!("  GET  {pfx}/health    — health check");
+        println!("  GET  {pfx}/metrics   — Prometheus metrics");
+        println!("  Press Ctrl+C to stop.\n");
     }
-    println!("  POST {pfx}/pair      — pair a new client (X-Pairing-Code header)");
-    println!("  POST {pfx}/webhook   — {{\"message\": \"your prompt\"}}");
-    if whatsapp_channel.is_some() {
-        println!("  GET  {pfx}/whatsapp  — Meta webhook verification");
-        println!("  POST {pfx}/whatsapp  — WhatsApp message webhook");
-    }
-    if linq_channel.is_some() {
-        println!("  POST {pfx}/linq      — Linq message webhook (iMessage/RCS/SMS)");
-    }
-    if wati_channel.is_some() {
-        println!("  GET  {pfx}/wati      — WATI webhook verification");
-        println!("  POST {pfx}/wati      — WATI message webhook");
-    }
-    if nextcloud_talk_channel.is_some() {
-        println!("  POST {pfx}/nextcloud-talk — Nextcloud Talk bot webhook");
-    }
-    println!("  GET  {pfx}/api/*     — REST API (bearer token required)");
-    println!("  GET  {pfx}/ws/chat   — WebSocket agent chat");
-    if config.nodes.enabled {
-        println!("  GET  {pfx}/ws/nodes  — WebSocket node discovery");
-    }
-    println!("  GET  {pfx}/health    — health check");
-    println!("  GET  {pfx}/metrics   — Prometheus metrics");
-    println!("  Press Ctrl+C to stop.\n");
 
     zeroclaw_runtime::health::mark_component_ok("gateway");
 

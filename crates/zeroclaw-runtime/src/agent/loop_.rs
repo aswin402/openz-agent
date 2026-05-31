@@ -3453,7 +3453,7 @@ pub async fn run(
                     config.mcp.servers.len()
                 )
             );
-            match crate::tools::McpRegistry::connect_all(&config.mcp.servers).await {
+            match crate::tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
                 Ok(registry) => {
                     let registry = std::sync::Arc::new(registry);
                     if config.mcp.deferred_loading {
@@ -4138,23 +4138,23 @@ pub async fn run(
             let _ = std::io::stdout().flush();
 
             println!(
-                "\x1B[1m\x1B[38;2;255;255;255m  ___  ____  _____ _   _ \x1B[38;2;249;115;22m_____\x1B[0m"
+                "\x1B[1m\x1B[38;2;255;255;255m  ___  ____  _____ _   _ \x1B[0m\x1B[1m\x1B[38;5;208m_____\x1B[0m"
             );
             println!(
-                "\x1B[1m\x1B[38;2;255;255;255m / _ \\|  _ \\| ____| \\ | \x1B[38;2;249;115;22m|__  /\x1B[0m"
+                "\x1B[1m\x1B[38;2;255;255;255m / _ \\|  _ \\| ____| \\ | |\x1B[0m\x1B[1m\x1B[38;5;208m__  /\x1B[0m"
             );
             println!(
-                "\x1B[1m\x1B[38;2;255;255;255m| | | | |_) |  _| |  \\| | \x1B[38;2;249;115;22m/ / \x1B[0m"
+                "\x1B[1m\x1B[38;2;255;255;255m| | | | |_) |  _| |  \\| |\x1B[0m\x1B[1m\x1B[38;5;208m / / \x1B[0m"
             );
             println!(
-                "\x1B[1m\x1B[38;2;255;255;255m| |_| |  __/| |___| |\\  |\x1B[38;2;249;115;22m/ /_ \x1B[0m"
+                "\x1B[1m\x1B[38;2;255;255;255m| |_| |  __/| |___| |\\  |\x1B[0m\x1B[1m\x1B[38;5;208m/ /_ \x1B[0m"
             );
             println!(
-                "\x1B[1m\x1B[38;2;255;255;255m \\___/|_|   |_____|_| \\_\x1B[38;2;249;115;22m/____|\x1B[0m"
+                "\x1B[1m\x1B[38;2;255;255;255m \\___/|_|   |_____|_| \\_/\x1B[0m\x1B[1m\x1B[38;5;208m____|\x1B[0m"
             );
             println!();
             println!(
-                "  \x1B[1m\x1B[38;2;255;255;255mopen\x1B[38;2;249;115;22mz\x1B[0m\x1B[1m - The minimal, self-improving, cutting-edge AI Agent CLI & TUI.\x1B[0m"
+                "  \x1B[1m\x1B[38;2;255;255;255mopen\x1B[0m\x1B[1m\x1B[38;5;208mz\x1B[0m\x1B[1m - The minimal, self-improving, cutting-edge AI Agent CLI & TUI.\x1B[0m"
             );
             println!(
                 "  Type {} for commands, or start chatting!\n",
@@ -4167,7 +4167,7 @@ pub async fn run(
                 .unwrap_or(false);
             if is_tui_active {
                 println!(
-                    "\x1B[1m\x1B[38;2;255;255;255mopen\x1B[38;2;249;115;22mz\x1B[0m\x1B[38;2;113;113;122m v{}\x1B[0m",
+                    "\x1B[1m\x1B[38;2;255;255;255mopen\x1B[0m\x1B[1m\x1B[38;5;208mz\x1B[0m\x1B[38;2;113;113;122m v{}\x1B[0m",
                     env!("CARGO_PKG_VERSION")
                 );
                 println!("\x1B[38;2;113;113;122mloading workspace...\x1B[0m");
@@ -6392,7 +6392,7 @@ pub async fn process_message(
                     config.mcp.servers.len()
                 )
             );
-            match crate::tools::McpRegistry::connect_all(&config.mcp.servers).await {
+            match crate::tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
                 Ok(registry) => {
                     let registry = std::sync::Arc::new(registry);
                     if config.mcp.deferred_loading {

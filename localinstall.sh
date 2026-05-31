@@ -1,5 +1,5 @@
 #!/bin/sh
-# localinstall.sh — Version v0.0.1
+# localinstall.sh — Version v0.0.4
 # Builds and installs openz locally on this machine so it can be run anywhere.
 
 set -eu
@@ -16,7 +16,7 @@ warn()  { printf "  ${YELLOW}⚠${RESET} %s\n" "$*" >&2; }
 die()   { printf "  ${RED}✗${RESET} %s\n" "$*" >&2; exit 1; }
 bold()  { printf "${BOLD}%s${RESET}" "$*"; }
 
-echo "🔨 Installing openz v0.0.1 locally..."
+echo "🔨 Installing openz v0.0.4 locally..."
 
 # Check rust/cargo
 if ! command -v cargo >/dev/null 2>&1; then

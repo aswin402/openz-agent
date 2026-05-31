@@ -1,5 +1,5 @@
 #!/bin/sh
-# localupdate.sh — Version v0.0.1
+# localupdate.sh — Version v0.0.4
 # Rebuilds and updates the globally installed openz binary when you make code changes.
 
 set -eu
@@ -16,7 +16,7 @@ warn()  { printf "  ${YELLOW}⚠${RESET} %s\n" "$*" >&2; }
 die()   { printf "  ${RED}✗${RESET} %s\n" "$*" >&2; exit 1; }
 bold()  { printf "${BOLD}%s${RESET}" "$*"; }
 
-echo "🔄 Updating openz v0.0.1 locally..."
+echo "🔄 Updating openz v0.0.4 locally..."
 
 # Rebuild release binary
 echo "📦 Rebuilding release binary..."
@@ -37,4 +37,4 @@ echo "🚚 Updating binary in $BIN_DIR/openz..."
 cp -f target/release/openz "$BIN_DIR/openz"
 chmod +x "$BIN_DIR/openz"
 
-info "openz updated successfully to version v0.0.1!"
+info "openz updated successfully to version v0.0.4!"

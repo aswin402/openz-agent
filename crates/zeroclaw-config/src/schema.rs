@@ -5553,6 +5553,9 @@ pub struct GatewayConfig {
     /// Default: 600s (10 minutes).
     #[serde(default = "default_gateway_long_running_request_timeout_secs")]
     pub long_running_request_timeout_secs: u64,
+    /// Gateway startup mode: manual, boot, or cli
+    #[serde(default = "default_gateway_mode")]
+    pub gateway_mode: String,
 }
 
 fn default_gateway_port() -> u16 {
@@ -5599,6 +5602,10 @@ fn default_false() -> bool {
     false
 }
 
+fn default_gateway_mode() -> String {
+    "manual".to_string()
+}
+
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
@@ -5621,6 +5628,7 @@ impl Default for GatewayConfig {
             tls: None,
             request_timeout_secs: default_gateway_request_timeout_secs(),
             long_running_request_timeout_secs: default_gateway_long_running_request_timeout_secs(),
+            gateway_mode: default_gateway_mode(),
         }
     }
 }

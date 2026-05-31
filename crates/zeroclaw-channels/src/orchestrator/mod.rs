@@ -6950,7 +6950,7 @@ pub async fn start_channels(
                     config.mcp.servers.len()
                 )
             );
-            match zeroclaw_runtime::tools::McpRegistry::connect_all(&config.mcp.servers).await {
+            match zeroclaw_runtime::tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
                 Ok(registry) => {
                     let registry = std::sync::Arc::new(registry);
                     if config.mcp.deferred_loading {
@@ -7168,14 +7168,17 @@ pub async fn start_channels(
         // alongside the per-channel ChannelRuntimeContext follow-up).
         if channels_by_name_shared.is_none() {
             if !skills.is_empty() {
-                println!(
-                    "  🧩 Skills:   {}",
-                    skills
-                        .iter()
-                        .map(|s| s.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+                let is_cli = config.gateway.gateway_mode == "cli";
+                if !is_cli {
+                    println!(
+                        "  🧩 Skills:   {}",
+                        skills
+                            .iter()
+                            .map(|s| s.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
             }
 
             #[allow(unused_mut)]
@@ -7212,22 +7215,44 @@ pub async fn start_channels(
                 return Ok(());
             }
 
-            println!("🦀 ZeroClaw Channel Server");
-            println!("  🤖 Model:    {model} (agent: {agent_alias})");
-            let effective_backend = config.resolve_active_storage().kind();
-            println!(
-                "  🧠 Memory:   {} (auto-save: {})",
-                effective_backend,
-                if config.memory.auto_save { "on" } else { "off" }
-            );
-            let channel_labels: Vec<String> = configured_channels
-                .iter()
-                .map(|cc| composite_channel_key(cc.channel.name(), cc.alias.as_deref()))
-                .collect();
-            println!("  📡 Channels: {}", channel_labels.join(", "));
-            println!("  🤖 Agents:   {}", enabled_agents.join(", "));
-            println!();
-            println!("  Listening for messages... (Ctrl+C to stop)");
+            let is_cli = config.gateway.gateway_mode == "cli";
+            if is_cli {
+                println!("\x1B[1m\x1B[38;2;139;92;246mmodel\x1B[0m             {model}");
+                println!("\x1B[1m\x1B[38;2;139;92;246magent\x1B[0m             {agent_alias}");
+                let auto_save = if config.memory.auto_save { "auto-save" } else { "none" };
+                println!("\x1B[1m\x1B[38;2;139;92;246mmemory\x1B[0m            {auto_save}");
+                let channel_labels: Vec<String> = configured_channels
+                    .iter()
+                    .map(|cc| composite_channel_key(cc.channel.name(), cc.alias.as_deref()))
+                    .collect();
+                println!("\x1B[1m\x1B[38;2;139;92;246mchannel\x1B[0m           {}", channel_labels.join(", "));
+                let in_flight = compute_max_in_flight_messages(channels.len());
+                println!("\x1B[1m\x1B[38;2;139;92;246minflight\x1B[0m          {in_flight}");
+                println!();
+                println!("\x1B[1m\x1B[38;2;139;92;246mready  and Skills\x1B[0m  ({} loaded)", skills.len());
+                println!();
+                println!("Data • Web • Crypto • Files");
+                println!("Communication • Maps • Automation");
+                println!("Visualization • Media • Reporting");
+                println!();
+            } else {
+                println!("🦀 ZeroClaw Channel Server");
+                println!("  🤖 Model:    {model} (agent: {agent_alias})");
+                let effective_backend = config.resolve_active_storage().kind();
+                println!(
+                    "  🧠 Memory:   {} (auto-save: {})",
+                    effective_backend,
+                    if config.memory.auto_save { "on" } else { "off" }
+                );
+                let channel_labels: Vec<String> = configured_channels
+                    .iter()
+                    .map(|cc| composite_channel_key(cc.channel.name(), cc.alias.as_deref()))
+                    .collect();
+                println!("  📡 Channels: {}", channel_labels.join(", "));
+                println!("  🤖 Agents:   {}", enabled_agents.join(", "));
+                println!();
+                println!("  Listening for messages... (Ctrl+C to stop)");
+            }
             println!();
 
             zeroclaw_runtime::health::mark_component_ok("channels");
@@ -7278,7 +7303,10 @@ pub async fn start_channels(
                 .unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&cbn));
 
             let in_flight = compute_max_in_flight_messages(channels.len());
-            println!("  🚦 In-flight message limit: {in_flight}");
+            let is_cli = config.gateway.gateway_mode == "cli";
+            if !is_cli {
+                println!("  🚦 In-flight message limit: {in_flight}");
+            }
 
             max_in_flight_messages = Some(in_flight);
             channels_by_name_shared = Some(cbn);

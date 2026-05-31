@@ -447,7 +447,7 @@ mod tests {
             registry: std::sync::Arc::new(
                 tokio::runtime::Runtime::new()
                     .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
+                    .block_on(McpRegistry::connect_all(&[], true))
                     .unwrap(),
             ),
         };
@@ -465,7 +465,7 @@ mod tests {
             registry: std::sync::Arc::new(
                 tokio::runtime::Runtime::new()
                     .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
+                    .block_on(McpRegistry::connect_all(&[], true))
                     .unwrap(),
             ),
         };
@@ -484,7 +484,7 @@ mod tests {
             registry: std::sync::Arc::new(
                 tokio::runtime::Runtime::new()
                     .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
+                    .block_on(McpRegistry::connect_all(&[], true))
                     .unwrap(),
             ),
         };
@@ -511,7 +511,7 @@ mod tests {
             registry: std::sync::Arc::new(
                 tokio::runtime::Runtime::new()
                     .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
+                    .block_on(McpRegistry::connect_all(&[], true))
                     .unwrap(),
             ),
         };
@@ -537,7 +537,7 @@ mod tests {
             registry: std::sync::Arc::new(
                 tokio::runtime::Runtime::new()
                     .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
+                    .block_on(McpRegistry::connect_all(&[], true))
                     .unwrap(),
             ),
         };
@@ -559,7 +559,7 @@ mod tests {
             registry: std::sync::Arc::new(
                 tokio::runtime::Runtime::new()
                     .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
+                    .block_on(McpRegistry::connect_all(&[], true))
                     .unwrap(),
             ),
         };
@@ -578,7 +578,7 @@ mod tests {
             registry: std::sync::Arc::new(
                 tokio::runtime::Runtime::new()
                     .unwrap()
-                    .block_on(McpRegistry::connect_all(&[]))
+                    .block_on(McpRegistry::connect_all(&[], true))
                     .unwrap(),
             ),
         };

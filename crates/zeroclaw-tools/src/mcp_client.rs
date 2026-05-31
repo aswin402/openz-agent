@@ -51,9 +51,9 @@ pub struct McpServer {
 
 impl McpServer {
     /// Connect to the server, perform the initialize handshake, and fetch the tool list.
-    pub async fn connect(config: McpServerConfig) -> Result<Self> {
+    pub async fn connect(config: McpServerConfig, silent: bool) -> Result<Self> {
         // Create transport based on config
-        let mut transport = create_transport(&config).with_context(|| {
+        let mut transport = create_transport(&config, silent).with_context(|| {
             format!(
                 "failed to create transport for MCP server `{}`",
                 config.name
@@ -229,6 +229,17 @@ impl McpServer {
 
 // ── McpRegistry ───────────────────────────────────────────────────────────
 
+use std::sync::atomic::AtomicBool;
+static SILENT_MCP: AtomicBool = AtomicBool::new(false);
+
+pub fn set_silent_mcp(silent: bool) {
+    SILENT_MCP.store(silent, Ordering::Relaxed);
+}
+
+pub fn is_silent_mcp() -> bool {
+    SILENT_MCP.load(Ordering::Relaxed)
+}
+
 /// Registry of all connected MCP servers, with a flat tool index.
 pub struct McpRegistry {
     servers: Vec<McpServer>,
@@ -238,12 +249,12 @@ pub struct McpRegistry {
 
 impl McpRegistry {
     /// Connect to all configured servers. Non-fatal: failures are logged and skipped.
-    pub async fn connect_all(configs: &[McpServerConfig]) -> Result<Self> {
+    pub async fn connect_all(configs: &[McpServerConfig], silent: bool) -> Result<Self> {
         let mut servers = Vec::new();
         let mut tool_index = HashMap::new();
 
         let has_enabled_servers = configs.iter().any(|c| c.enabled);
-        if has_enabled_servers {
+        if has_enabled_servers && !silent {
             #[cfg(not(test))]
             {
                 println!("\x1B[1m\x1B[38;2;139;92;246msetting up servers...\x1B[0m");
@@ -254,7 +265,7 @@ impl McpRegistry {
             if !config.enabled {
                 continue;
             }
-            match McpServer::connect(config.clone()).await {
+            match McpServer::connect(config.clone(), silent).await {
                 Ok(server) => {
                     let server_idx = servers.len();
                     // Collect tools while holding the lock once, then release
@@ -267,10 +278,12 @@ impl McpRegistry {
                     servers.push(server);
                     #[cfg(not(test))]
                     {
-                        println!(
-                            "\x1b[36mINFO\x1b[0m → \x1b[1m\x1b[37m{}:\x1b[0m started successfully",
-                            config.name
-                        );
+                        if !silent {
+                            println!(
+                                "\x1b[36mINFO\x1b[0m → \x1b[1m\x1b[37m{}:\x1b[0m started successfully",
+                                config.name
+                            );
+                        }
                     }
                 }
                 // Non-fatal — log and continue with remaining servers
@@ -283,16 +296,18 @@ impl McpRegistry {
                     );
                     #[cfg(not(test))]
                     {
-                        println!(
-                            "\x1b[31mERROR\x1b[0m → \x1b[1m\x1b[37m{}:\x1b[0m failed to start ({:#})",
-                            config.name, e
-                        );
+                        if !silent {
+                            println!(
+                                "\x1b[31mERROR\x1b[0m → \x1b[1m\x1b[37m{}:\x1b[0m failed to start ({:#})",
+                                config.name, e
+                            );
+                        }
                     }
                 }
             }
         }
 
-        if has_enabled_servers {
+        if has_enabled_servers && !silent {
             #[cfg(not(test))]
             {
                 println!("\x1B[1m\x1B[32mready to go..\x1B[0m");
@@ -403,7 +418,7 @@ mod tests {
             headers: std::collections::HashMap::default(),
             enabled: true,
         }];
-        let registry = McpRegistry::connect_all(&configs)
+        let registry = McpRegistry::connect_all(&configs, true)
             .await
             .expect("connect_all should not fail");
         assert!(registry.is_empty());
@@ -424,7 +439,7 @@ mod tests {
             headers: std::collections::HashMap::default(),
             enabled: false, // Disabled
         }];
-        let registry = McpRegistry::connect_all(&configs)
+        let registry = McpRegistry::connect_all(&configs, true)
             .await
             .expect("connect_all should not fail");
         assert!(registry.is_empty());
@@ -438,7 +453,7 @@ mod tests {
             transport: McpTransport::Http,
             ..Default::default()
         };
-        let result = create_transport(&config);
+        let result = create_transport(&config, true);
         assert!(result.is_err());
     }
 
@@ -449,7 +464,7 @@ mod tests {
             transport: McpTransport::Sse,
             ..Default::default()
         };
-        let result = create_transport(&config);
+        let result = create_transport(&config, true);
         assert!(result.is_err());
     }
 
@@ -457,7 +472,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_registry_is_empty() {
-        let registry = McpRegistry::connect_all(&[])
+        let registry = McpRegistry::connect_all(&[], true)
             .await
             .expect("connect_all on empty slice should succeed");
         assert!(registry.is_empty());
@@ -467,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_registry_tool_names_is_empty() {
-        let registry = McpRegistry::connect_all(&[])
+        let registry = McpRegistry::connect_all(&[], true)
             .await
             .expect("connect_all should succeed");
         assert!(registry.tool_names().is_empty());
@@ -475,7 +490,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_registry_get_tool_def_returns_none() {
-        let registry = McpRegistry::connect_all(&[])
+        let registry = McpRegistry::connect_all(&[], true)
             .await
             .expect("connect_all should succeed");
         let result = registry.get_tool_def("nonexistent__tool").await;
@@ -484,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_registry_call_tool_unknown_name_returns_error() {
-        let registry = McpRegistry::connect_all(&[])
+        let registry = McpRegistry::connect_all(&[], true)
             .await
             .expect("connect_all should succeed");
         let err = registry
@@ -496,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn connect_all_empty_gives_zero_servers() {
-        let registry = McpRegistry::connect_all(&[])
+        let registry = McpRegistry::connect_all(&[], true)
             .await
             .expect("connect_all should succeed");
         // Verify all three count methods agree on zero.

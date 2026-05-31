@@ -382,6 +382,20 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                     // not need the single-level `route_hashmap_path` ops
                     // (they wouldn't typecheck against the inner HashMap).
                     nested_set.push(quote! {
+                        if let Some((hm_key, inner_name)) = crate::config::route_hashmap_path(
+                            name,
+                            Self::configurable_prefix(),
+                            #field_name_lit,
+                            <#value_ty>::configurable_prefix(),
+                            self.#field_ident.keys().map(String::as_str),
+                        ) {
+                            let hm_key = hm_key.to_string();
+                            if let Some(inner) = self.#field_ident.get_mut(&hm_key) {
+                                if let Ok(()) = inner.set_secret(&inner_name, value.clone()) {
+                                    return Ok(());
+                                }
+                            }
+                        }
                         for inner in self.#field_ident.values_mut() {
                             if let Ok(()) = inner.set_secret(name, value.clone()) {
                                 return Ok(());
@@ -1289,11 +1303,6 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                 nested_collect.push(quote! {
                     fields.extend(self.#field_ident.secret_fields());
                 });
-                nested_set.push(quote! {
-                    if let Ok(()) = self.#field_ident.set_secret(name, value.clone()) {
-                        return Ok(());
-                    }
-                });
                 nested_encrypt.push(quote! {
                     self.#field_ident.encrypt_secrets(store)?;
                 });
@@ -1380,6 +1389,27 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                                     format!("{inner_prefix}.{leaf}")
                                 };
                                 if let Ok(()) = self.#field_ident.set_prop(&inner_name, value_str) {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    });
+                    nested_set.push(quote! {
+                        {
+                            let outer_prefix = Self::configurable_prefix();
+                            let inner_prefix = <#field_ty>::configurable_prefix();
+                            let leaf = if outer_prefix.is_empty() {
+                                Some(name)
+                            } else {
+                                name.strip_prefix(outer_prefix).and_then(|s| s.strip_prefix('.'))
+                            };
+                            if let Some(leaf) = leaf {
+                                let inner_name = if inner_prefix.is_empty() {
+                                    leaf.to_string()
+                                } else {
+                                    format!("{inner_prefix}.{leaf}")
+                                };
+                                if let Ok(()) = self.#field_ident.set_secret(&inner_name, value.clone()) {
                                     return Ok(());
                                 }
                             }
@@ -1475,6 +1505,30 @@ pub fn derive_configurable(input: TokenStream) -> TokenStream {
                                     format!("{inner_prefix}.{leaf}")
                                 };
                                 if let Ok(()) = self.#field_ident.set_prop(&inner_name, value_str) {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    });
+
+                    nested_set.push(quote! {
+                        {
+                            let inner_prefix = <#field_ty>::configurable_prefix();
+                            let nested_prefix = if Self::configurable_prefix().is_empty() {
+                                #plain_field_name_lit.to_string()
+                            } else {
+                                format!("{}.{}", Self::configurable_prefix(), #plain_field_name_lit)
+                            };
+                            if let Some(leaf) = name
+                                .strip_prefix(&nested_prefix)
+                                .and_then(|s| s.strip_prefix('.'))
+                            {
+                                let inner_name = if inner_prefix.is_empty() {
+                                    leaf.to_string()
+                                } else {
+                                    format!("{inner_prefix}.{leaf}")
+                                };
+                                if let Ok(()) = self.#field_ident.set_secret(&inner_name, value.clone()) {
                                     return Ok(());
                                 }
                             }

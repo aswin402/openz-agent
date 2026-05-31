@@ -9,6 +9,22 @@ use zeroclaw_memory::{MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
 
 const STATUS_FLUSH_SECONDS: u64 = 5;
 
+static DAEMON_SHUTDOWN_TOKEN: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>> =
+    std::sync::Mutex::new(None);
+
+pub fn get_shutdown_token() -> tokio_util::sync::CancellationToken {
+    let mut lock = DAEMON_SHUTDOWN_TOKEN.lock().unwrap();
+    if lock.is_none() {
+        *lock = Some(tokio_util::sync::CancellationToken::new());
+    }
+    lock.as_ref().unwrap().clone()
+}
+
+pub fn reset_shutdown_token() {
+    let mut lock = DAEMON_SHUTDOWN_TOKEN.lock().unwrap();
+    *lock = None;
+}
+
 /// Why the daemon's main loop returned.
 ///
 /// `Shutdown`: process exits cleanly. `Reload`: caller (typically `src/main.rs`)
@@ -39,9 +55,14 @@ async fn wait_for_exit_signal(
         let mut sigint = signal(SignalKind::interrupt())?;
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sighup = signal(SignalKind::hangup())?;
+        let shutdown_token = get_shutdown_token();
 
         loop {
             tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "Received programmatic shutdown, shutting down...");
+                    return Ok(DaemonExit::Shutdown);
+                }
                 _ = sigint.recv() => {
                     ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "Received SIGINT, shutting down...");
                     return Ok(DaemonExit::Shutdown);
@@ -72,8 +93,13 @@ async fn wait_for_exit_signal(
 
     #[cfg(not(unix))]
     {
+        let shutdown_token = get_shutdown_token();
         loop {
             tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "Received programmatic shutdown, shutting down...");
+                    return Ok(DaemonExit::Shutdown);
+                }
                 res = tokio::signal::ctrl_c() => {
                     res?;
                     ::zeroclaw_log::record!(INFO, ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note), "Received Ctrl+C, shutting down...");
@@ -294,13 +320,48 @@ pub async fn run(
         );
     }
 
-    println!("🧠 ZeroClaw daemon started");
-    println!("   Gateway:  http://{host}:{port}");
-    println!("   Components: gateway, channels, heartbeat, scheduler");
-    if config.gateway.require_pairing {
-        println!("   Pairing:    enabled (code appears in gateway output above)");
+    let daemon_mode = config.gateway.gateway_mode.clone();
+    if daemon_mode != "cli" {
+        println!("ZeroClaw daemon started");
+        println!("   Gateway:  http://{host}:{port}");
+        println!("   Components: gateway, channels, heartbeat, scheduler");
+        if config.gateway.require_pairing {
+            println!("   Pairing:    enabled (code appears in gateway output above)");
+        }
+        println!("   Ctrl+C or SIGTERM to stop");
     }
-    println!("   Ctrl+C or SIGTERM to stop");
+
+    if (daemon_mode == "boot" || daemon_mode == "cli") && !config.channels.telegram.is_empty() {
+        let startup_config = config.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let wakeup_phrases = [
+                "hey just now wake up",
+                "ready to chat",
+                "hii",
+                "hllo",
+                "whats on ur mind",
+                "yo",
+            ];
+            let idx = (chrono::Utc::now().timestamp_micros() as usize) % wakeup_phrases.len();
+            let msg = wakeup_phrases[idx];
+
+            for alias in startup_config.channels.telegram.keys() {
+                let peers = startup_config.channel_external_peers("telegram", alias);
+                for peer in peers {
+                    let channel_key = format!("telegram.{}", alias);
+                    let _ = crate::cron::scheduler::deliver_announcement(
+                        &startup_config,
+                        &channel_key,
+                        &peer,
+                        None,
+                        msg,
+                    )
+                    .await;
+                }
+            }
+        });
+    }
 
     // Wait for shutdown (SIGINT/SIGTERM/Ctrl+C) or reload (in-process channel).
     let exit = wait_for_exit_signal(reload_rx).await?;
@@ -311,6 +372,27 @@ pub async fn run(
             DaemonExit::Reload => "reload requested",
         },
     );
+
+    if (daemon_mode == "boot" || daemon_mode == "cli") && !config.channels.telegram.is_empty() {
+        let sleep_phrases = ["byee...", "see u later", "later..", "i am going to sleep"];
+        let idx = (chrono::Utc::now().timestamp_micros() as usize) % sleep_phrases.len();
+        let msg = sleep_phrases[idx];
+
+        for alias in config.channels.telegram.keys() {
+            let peers = config.channel_external_peers("telegram", alias);
+            for peer in peers {
+                let channel_key = format!("telegram.{}", alias);
+                let _ = crate::cron::scheduler::deliver_announcement(
+                    &config,
+                    &channel_key,
+                    &peer,
+                    None,
+                    msg,
+                )
+                .await;
+            }
+        }
+    }
 
     // Fire channel cancellation before aborting supervisors so listener tasks
     // get a chance to drop their `Arc<dyn Channel>` (and the matrix-sdk SQLite
@@ -327,6 +409,8 @@ pub async fn run(
     unsafe {
         libc::malloc_trim(0);
     }
+
+    reset_shutdown_token();
 
     Ok(exit)
 }

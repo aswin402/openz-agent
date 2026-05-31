@@ -87,7 +87,7 @@ pub struct StdioTransport {
 }
 
 impl StdioTransport {
-    pub fn new(config: &McpServerConfig) -> Result<Self> {
+    pub fn new(config: &McpServerConfig, silent: bool) -> Result<Self> {
         let mut child = Command::new(&config.command)
             .args(&config.args)
             .envs(&config.env)
@@ -143,8 +143,10 @@ impl StdioTransport {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                if let Some(formatted) = format_mcp_log(&server_name, &line) {
-                    println!("{}", formatted);
+                if !silent {
+                    if let Some(formatted) = format_mcp_log(&server_name, &line) {
+                        println!("{}", formatted);
+                    }
                 }
             }
         });
@@ -1051,9 +1053,9 @@ impl McpTransportConn for SseTransport {
 // ── Factory ──────────────────────────────────────────────────────────────
 
 /// Create a transport based on config.
-pub fn create_transport(config: &McpServerConfig) -> Result<Box<dyn McpTransportConn>> {
+pub fn create_transport(config: &McpServerConfig, silent: bool) -> Result<Box<dyn McpTransportConn>> {
     match config.transport {
-        McpTransport::Stdio => Ok(Box::new(StdioTransport::new(config)?)),
+        McpTransport::Stdio => Ok(Box::new(StdioTransport::new(config, silent)?)),
         McpTransport::Http => Ok(Box::new(HttpTransport::new(config)?)),
         McpTransport::Sse => Ok(Box::new(SseTransport::new(config)?)),
     }
@@ -1076,6 +1078,15 @@ fn format_mcp_log(server_name: &str, line: &str) -> Option<String> {
     }
 
     let line_lower = trimmed.to_lowercase();
+    if line_lower.contains("closed")
+        || line_lower.contains("shutting down")
+        || line_lower.contains("shut down")
+        || line_lower.contains("exited")
+        || line_lower.contains("exiting")
+        || line_lower.contains("stopping")
+    {
+        return None;
+    }
 
     // Determine level
     let level = if line_lower.contains("error")
