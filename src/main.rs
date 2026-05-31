@@ -1136,6 +1136,13 @@ async fn run_configure_models_submenu(
         }
 
         let agent_prefix = "agents.assistant";
+        if config.agents.get("assistant").is_none() {
+            config.agents.insert(
+                "assistant".to_string(),
+                zeroclaw_config::schema::AliasedAgentConfig::default(),
+            );
+            config.mark_dirty(agent_prefix);
+        }
         config.set_prop_persistent(
             &format!("{agent_prefix}.model-provider"),
             &format!("{picked}.{alias}"),
@@ -1155,6 +1162,11 @@ async fn run_configure_models_submenu(
         for sub_name in subagent_names {
             let sa_prefix = format!("agents.{}", sub_name);
             if config.agents.get(sub_name).is_none() {
+                config.agents.insert(
+                    sub_name.to_string(),
+                    zeroclaw_config::schema::AliasedAgentConfig::default(),
+                );
+                config.mark_dirty(&sa_prefix);
                 config.set_prop_persistent(
                     &format!("{sa_prefix}.model-provider"),
                     &format!("{picked}.{alias}"),
