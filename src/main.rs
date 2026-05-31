@@ -677,41 +677,75 @@ fn get_configured_families(config: &Config) -> Vec<String> {
 
 fn get_recommended_model(subagent: &str, family: &str) -> &'static str {
     match (subagent, family) {
-        ("coder", "anthropic") => "claude-3-5-sonnet-20241022",
-        ("coder", "openai") => "gpt-4o",
-        ("coder", "gemini") => "gemini-1.5-pro",
-        ("coder", "deepseek") => "deepseek-chat",
-        ("reviewer", "anthropic") => "claude-3-5-sonnet-20241022",
-        ("reviewer", "openai") => "gpt-4o",
-        ("reviewer", "gemini") => "gemini-1.5-pro",
-        ("research-agent", "anthropic") => "claude-3-5-haiku-20241022",
-        ("research-agent", "openai") => "gpt-4o-mini",
-        ("research-agent", "gemini") => "gemini-1.5-flash",
-        ("openz-planagent", "anthropic") => "claude-3-5-sonnet-20241022",
-        ("openz-planagent", "openai") => "gpt-4o",
-        ("openz-planagent", "gemini") => "gemini-1.5-pro",
-        ("worker", "anthropic") => "claude-3-5-haiku-20241022",
-        ("worker", "openai") => "gpt-4o-mini",
-        ("worker", "gemini") => "gemini-1.5-flash",
-        ("docs-agent", "anthropic") => "claude-3-5-sonnet-20241022",
-        ("docs-agent", "openai") => "gpt-4o-mini",
-        ("docs-agent", "gemini") => "gemini-1.5-flash",
-        ("vision-agent", "anthropic") => "claude-3-5-sonnet-20241022",
-        ("vision-agent", "openai") => "gpt-4o",
-        ("vision-agent", "gemini") => "gemini-1.5-pro",
+        // Coder recommendations
+        ("coder", "mistral") => "devstral-small-2507",
+        ("coder", "groq") => "meta-llama/llama-4-scout-17b-16e-instruct",
+        ("coder", "cerebras") => "gpt-oss-120b",
+        ("coder", "nvidia") => "qwen/qwen3-coder-480b-a35b-instruct",
+
+        // Reviewer recommendations
+        ("reviewer", "minimax") => "MiniMax-M2.7",
+        ("reviewer", "groq") => "qwen/qwen3-32b",
+        ("reviewer", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
+        ("reviewer", "nvidia") => "meta/llama-3.3-70b-instruct",
+
+        // Docs / Docs-agent recommendations
+        ("docs-agent" | "docs", "groq") => "llama-3.3-70b-versatile",
+        ("docs-agent" | "docs", "mistral") => "mistral-small-latest",
+        ("docs-agent" | "docs", "cerebras") => "gpt-oss-120b",
+        ("docs-agent" | "docs", "ollama") => "gemma4:31b",
+
+        // Vision-agent / agentz-vision recommendations
+        ("vision-agent" | "agentz-vision", "mistral") => "pixtral-12b",
+        ("vision-agent" | "agentz-vision", "nvidia") => "meta/llama-3.2-90b-vision-instruct",
+        ("vision-agent" | "agentz-vision", "gemini") => "gemini-2.5-flash",
+
+        // Planner / openz-planagent recommendations
+        ("openz-planagent" | "planner", "groq") => "meta-llama/llama-4-scout-17b-16e-instruct",
+        ("openz-planagent" | "planner", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
+        ("openz-planagent" | "planner", "ollama") => "minimax-m2.7",
+        ("openz-planagent" | "planner", "opencode") => "qwen3.6-plus-free",
+
+        // Assistant / Controller / agentz recommendations
+        ("assistant" | "controller" | "agentz", "minimax") => "MiniMax-M2.7",
+
+        // Tester recommendations
+        ("tester", "groq") => "meta-llama/llama-4-scout-17b-16e-instruct",
+        ("tester", "cerebras") => "llama3.1-8b",
+        ("tester", "mistral") => "codestral-latest",
+        ("tester", "opencode") => "qwen3.6-plus-free",
+
+        // Security recommendations
+        ("security", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
+        ("security", "groq") => "qwen/qwen3-32b",
+        ("security", "nvidia") => "meta/llama-guard-4-12b",
+
+        // Refactor recommendations
+        ("refactor", "mistral") => "devstral-medium-latest",
+        ("refactor", "groq") => "qwen/qwen3-32b",
+        ("refactor", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
+        ("refactor", "nvidia") => "qwen/qwen3.5-122b-a10b",
+
+        // Debugger recommendations
+        ("debugger", "groq") => "meta-llama/llama-4-scout-17b-16e-instruct",
+        ("debugger", "cerebras") => "qwen-3-235b-a22b-instruct-2507",
+        ("debugger", "nvidia") => "deepseek-ai/deepseek-v4-flash",
+
+        // Defaults for families if not matched above
         _ => match family {
             "anthropic" => "claude-3-5-sonnet-20241022",
             "openai" => "gpt-4o",
-            "gemini" => "gemini-1.5-pro",
-            "groq" => "llama-3.3-70b-versatile",
+            "gemini" => "gemini-2.5-flash",
+            "groq" => "meta-llama/llama-4-scout-17b-16e-instruct",
             "deepseek" => "deepseek-chat",
-            "ollama" => "llama3",
+            "ollama" => "minimax-m2.7",
             "openrouter" => "anthropic/claude-3.5-sonnet",
-            "mistral" => "mistral-large-latest",
-            "zai" | "z.ai" => "zai-llama3-70b-instruct",
-            "opencode" => "opencode-zen-latest",
-            "cerebras" => "llama3.1-70b",
-            "nvidia" => "nvidia/llama-3.1-nemotron-70b-instruct",
+            "mistral" => "devstral-small-2507",
+            "zai" | "z.ai" => "glm-4.7",
+            "opencode" => "deepseek-v4-flash-free",
+            "cerebras" => "qwen-3-235b-a22b-instruct-2507",
+            "nvidia" => "qwen/qwen3-coder-480b-a35b-instruct",
+            "minimax" => "MiniMax-M2.7",
             _ => "model-id",
         },
     }
@@ -726,21 +760,38 @@ fn get_models_list_for_family(family: &str) -> Vec<&'static str> {
         ],
         "openai" => vec!["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"],
         "gemini" => vec![
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-            "gemini-2.0-flash-exp",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-preview-05-20",
+            "gemini-2.5-pro",
             "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-2.5-flash-lite-preview-06-17",
         ],
         "groq" => vec![
+            "meta-llama/llama-4-scout-17b-16e-instruct",
             "llama-3.3-70b-versatile",
+            "qwen/qwen3-32b",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
             "llama-3.1-8b-instant",
-            "llama3-70b-8192",
-            "llama3-8b-8192",
-            "mixtral-8x7b-32768",
-            "gemma2-9b-it",
+            "moonshotai/kimi-k2-instruct-0905",
         ],
         "deepseek" => vec!["deepseek-chat", "deepseek-coder"],
-        "ollama" => vec!["llama3", "mistral", "phi3"],
+        "ollama" => vec![
+            "minimax-m2.7",
+            "devstral-small-2:24b",
+            "devstral-2:123b",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "glm-4.7",
+            "glm-5.1",
+            "gemma4:31b",
+            "qwen3-coder:480b",
+            "qwen3-next:80b",
+            "kimi-k2:1t",
+            "nemotron-3-super",
+            "gpt-oss:120b",
+        ],
         "openrouter" => vec![
             "anthropic/claude-3.5-sonnet",
             "google/gemini-flash-1.5",
@@ -748,32 +799,52 @@ fn get_models_list_for_family(family: &str) -> Vec<&'static str> {
         ],
         "lmstudio" => vec!["model-id"],
         "mistral" => vec![
-            "mistral-large-latest",
-            "mistral-small-latest",
+            "devstral-small-2507",
+            "devstral-medium-latest",
             "codestral-latest",
-            "open-mistral-nemo",
+            "mistral-small-latest",
+            "ministral-3b-latest",
+            "ministral-8b-latest",
+            "open-mistral-7b",
+            "mistral-nemo",
             "pixtral-12b",
         ],
         "z.ai" | "zai" => vec![
-            "zai-llama3-70b-instruct",
-            "zai-llama3-8b-instruct",
-            "zai-gemma2-9b-it",
-            "zai-mixtral-8x7b-instruct",
+            "glm-4.7",
         ],
         "opencode" => vec![
-            "opencode-zen-latest",
-            "opencode-zen-coder-latest",
+            "deepseek-v4-flash-free",
+            "minimax-m2.5-free",
+            "nemotron-3-super-free",
+            "qwen3.6-plus-free",
+            "big-pickle",
         ],
         "cerebras" => vec![
+            "qwen-3-235b-a22b-instruct-2507",
+            "gpt-oss-120b",
             "llama3.1-8b",
-            "llama3.1-70b",
+            "zai-glm-4.7",
         ],
         "nvidia" => vec![
-            "meta/llama-3.1-405b-instruct",
-            "meta/llama-3.1-70b-instruct",
-            "meta/llama-3.1-8b-instruct",
-            "mistralai/mistral-large",
-            "nvidia/llama-3.1-nemotron-70b-instruct",
+            "meta/llama-3.2-11b-vision-instruct",
+            "meta/llama-3.2-90b-vision-instruct",
+            "microsoft/phi-4-multimodal-instruct",
+            "qwen/qwen3-coder-480b-a35b-instruct",
+            "qwen/qwen2.5-coder-32b-instruct",
+            "deepseek-ai/deepseek-v4-flash",
+            "deepseek-ai/deepseek-v4-pro",
+            "meta/llama-4-maverick-17b-128e-instruct",
+            "meta/llama-3.3-70b-instruct",
+            "meta/llama-guard-4-12b",
+            "qwen/qwen3-next-80b-a3b-instruct",
+            "qwen/qwen3.5-397b-a17b",
+            "z-ai/glm4.7",
+            "z-ai/glm-5.1",
+            "google/gemma-4-31b-it",
+            "mistralai/mistral-nemotron",
+        ],
+        "minimax" => vec![
+            "MiniMax-M2.7",
         ],
         _ => vec![],
     }
@@ -929,8 +1000,14 @@ async fn run_configure_models_submenu(
         "openai",
         "gemini",
         "groq",
-        "deepseek",
+        "cerebras",
+        "mistral",
+        "nvidia",
+        "opencode",
+        "zai",
         "ollama",
+        "minimax",
+        "deepseek",
         "openrouter",
         "lmstudio",
         "Other",
@@ -996,38 +1073,19 @@ async fn run_configure_models_submenu(
             String::new()
         };
 
-        let mut model_options = match picked.as_str() {
-            "anthropic" => vec![
-                "claude-3-5-sonnet-20241022 (Recommended)",
-                "claude-3-5-haiku-20241022",
-                "claude-3-opus-20240229",
-            ],
-            "openai" => vec![
-                "gpt-4o (Recommended)",
-                "gpt-4o-mini",
-                "o1-preview",
-                "o1-mini",
-            ],
-            "gemini" => vec![
-                "gemini-1.5-pro (Recommended)",
-                "gemini-1.5-flash",
-                "gemini-2.0-flash-exp",
-            ],
-            "groq" => vec![
-                "llama3-70b-8192 (Recommended)",
-                "llama3-8b-8192",
-                "mixtral-8x7b-32768",
-            ],
-            "deepseek" => vec!["deepseek-chat (Recommended)", "deepseek-coder"],
-            "ollama" => vec!["llama3 (Recommended)", "mistral", "phi3"],
-            "openrouter" => vec![
-                "anthropic/claude-3.5-sonnet (Recommended)",
-                "google/gemini-flash-1.5",
-                "meta-llama/llama-3-8b-instruct",
-            ],
-            _ => vec![],
-        };
-        model_options.push("Custom Model ID");
+        let family_models = get_models_list_for_family(&picked);
+        let recommended_model = get_recommended_model("assistant", &picked);
+        let mut model_options: Vec<String> = family_models
+            .into_iter()
+            .map(|m| {
+                if m == recommended_model {
+                    format!("{} (Recommended)", m)
+                } else {
+                    m.to_string()
+                }
+            })
+            .collect();
+        model_options.push("Custom Model ID".to_string());
 
         let model_selection = Select::with_theme(theme)
             .with_prompt("Select model")
@@ -1041,7 +1099,7 @@ async fn run_configure_models_submenu(
                 .interact_text()?;
             custom.trim().to_string()
         } else {
-            let selected_raw = model_options[model_selection];
+            let selected_raw = &model_options[model_selection];
             if let Some(pos) = selected_raw.find(" (Recommended)") {
                 selected_raw[..pos].to_string()
             } else {
@@ -1984,9 +2042,35 @@ async fn select_subagent_model(
                         }
                         KeyCode::Enter => {
                             if focus == Focus::Left {
-                                focus = Focus::Right;
-                                selected_right_idx = 0;
-                                needs_redraw = true;
+                                if selected_left_idx == configured_families.len() {
+                                    for _ in 0..prev_lines_drawn {
+                                        print!("\x1B[1A\x1B[K");
+                                    }
+                                    let _ = stdout.flush();
+                                    let _ = stdout.write_all(b"\x1B[?25h");
+                                    let _ = stdout.flush();
+                                    let _ = disable_raw_mode();
+
+                                    let family_idx = Select::with_theme(theme)
+                                        .with_prompt("Select Provider Family")
+                                        .items(&configured_families)
+                                        .default(0)
+                                        .interact()?;
+                                    let family = configured_families[family_idx].clone();
+
+                                    let custom_id: String = dialoguer::Input::new()
+                                        .with_prompt("Enter Custom Model ID")
+                                        .interact_text()?;
+                                    let model_id = custom_id.trim().to_string();
+                                    if model_id.is_empty() {
+                                        return Ok(None);
+                                    }
+                                    return Ok(Some((family, model_id)));
+                                } else {
+                                    focus = Focus::Right;
+                                    selected_right_idx = 0;
+                                    needs_redraw = true;
+                                }
                             } else {
                                 for _ in 0..prev_lines_drawn {
                                     print!("\x1B[1A\x1B[K");
