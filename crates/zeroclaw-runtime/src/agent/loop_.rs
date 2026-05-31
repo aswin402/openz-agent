@@ -1418,6 +1418,8 @@ pub async fn agent_turn(
     activated_tools: Option<&std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>>,
     model_switch_callback: Option<ModelSwitchCallback>,
     strict_tool_parsing: bool,
+    max_tool_result_chars: usize,
+    context_token_budget: usize,
     channel: Option<&dyn Channel>,
 ) -> Result<String> {
     run_tool_call_loop(
@@ -1443,8 +1445,8 @@ pub async fn agent_turn(
         model_switch_callback,
         &zeroclaw_config::schema::PacingConfig::default(),
         strict_tool_parsing,
-        0,    // max_tool_result_chars: 0 = disabled (legacy callers)
-        0,    // context_token_budget: 0 = disabled (legacy callers)
+        max_tool_result_chars,
+        context_token_budget,
         None, // shared_budget: no shared budget for legacy callers
         channel,
         None, // receipt_generator
@@ -3175,9 +3177,9 @@ fn get_model_max_context(model_name: &str) -> Option<usize> {
         || name.contains("claude-3")
     {
         Some(200_000)
-    } else if name.contains("gemini-1.5-pro") || name.contains("gemini-2.0") {
+    } else if name.contains("gemini-") && name.contains("-pro") {
         Some(2_097_152)
-    } else if name.contains("gemini-1.5-flash") || name.contains("gemini-") {
+    } else if name.contains("gemini-") {
         Some(1_048_576)
     } else if name.contains("deepseek-") {
         Some(64_000)
@@ -6740,6 +6742,8 @@ pub async fn process_message(
             activated_handle_pm.as_ref(),
             None,
             agent.strict_tool_parsing,
+            agent.max_tool_result_chars,
+            agent.max_context_tokens,
             None, // channel: process_message path has no channel ref
         )
         .await
@@ -6814,7 +6818,7 @@ async fn run_configure_wizard_inline(config: &mut Config) -> Result<()> {
     let default_model = match picked.as_str() {
         "anthropic" => "claude-3-5-sonnet-20241022",
         "openai" => "gpt-4o",
-        "gemini" => "gemini-1.5-pro",
+        "gemini" => "gemini-3.5-flash",
         "groq" => "llama3-70b-8192",
         "deepseek" => "deepseek-chat",
         "ollama" => "llama3",
@@ -11955,6 +11959,8 @@ This is an example, not an invocation."#;
                 Some(&activated),
                 None,
                 false,
+                50_000,
+                32_000,
                 None, // channel
             )
             .await
@@ -12020,6 +12026,8 @@ This is an example, not an invocation."#;
                 Some(&activated),
                 None,
                 true,
+                50_000,
+                32_000,
                 None, // channel
             )
             .await

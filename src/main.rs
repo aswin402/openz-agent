@@ -734,7 +734,7 @@ fn get_recommended_model(subagent: &str, family: &str, slot: usize) -> &'static 
     match family {
         "anthropic" => "claude-3-5-sonnet-20241022",
         "openai" => "gpt-4o",
-        "gemini" => "gemini-2.5-flash",
+        "gemini" => "gemini-3.5-flash",
         "groq" => "meta-llama/llama-4-scout-17b-16e-instruct",
         "deepseek" => "deepseek-chat",
         "ollama" => "minimax-m2.7",
@@ -758,12 +758,12 @@ fn get_models_list_for_family(family: &str) -> Vec<&'static str> {
         ],
         "openai" => vec!["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"],
         "gemini" => vec![
+            "gemini-3.5-flash",
+            "gemini-3.1-pro",
+            "gemini-3.1-flash",
+            "gemini-3.1-flash-lite",
             "gemini-2.5-flash",
-            "gemini-2.5-flash-preview-05-20",
             "gemini-2.5-pro",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-2.5-flash-lite-preview-06-17",
         ],
         "groq" => vec![
             "meta-llama/llama-4-scout-17b-16e-instruct",
