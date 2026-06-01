@@ -67,8 +67,8 @@ fn agent_config_default_max_tool_iterations() {
 fn agent_config_default_max_history_messages() {
     let agent = AliasedAgentConfig::default();
     assert_eq!(
-        agent.max_history_messages, 50,
-        "default max_history_messages should be 50"
+        agent.max_history_messages, 25,
+        "default max_history_messages should be 25"
     );
 }
 
@@ -270,7 +270,7 @@ default_temperature = 0.7
     // configured but omits a tunable.
     let default_agent_cfg = zeroclaw_config::schema::AliasedAgentConfig::default();
     assert_eq!(default_agent_cfg.max_tool_iterations, 10);
-    assert_eq!(default_agent_cfg.max_history_messages, 50);
+    assert_eq!(default_agent_cfg.max_history_messages, 25);
     assert!(default_agent_cfg.compact_context);
 }
 
@@ -291,7 +291,7 @@ compact_context = true
     assert_eq!(agent.max_tool_iterations, 3);
     assert!(agent.compact_context);
     // max_history_messages should still use default
-    assert_eq!(agent.max_history_messages, 50);
+    assert_eq!(agent.max_history_messages, 25);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

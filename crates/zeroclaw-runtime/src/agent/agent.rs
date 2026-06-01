@@ -745,6 +745,7 @@ impl Agent {
             config,
             None,
             false,
+            None,
         );
 
         // ── Wire MCP tools (non-fatal) ─────────────────────────────

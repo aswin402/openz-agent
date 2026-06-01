@@ -85,7 +85,7 @@ pub struct HistoryPrunerConfig {
 impl Default for HistoryPrunerConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             max_tokens: 8192,
             keep_recent: 4,
             collapse_tool_results: true,

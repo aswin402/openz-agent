@@ -269,8 +269,7 @@ async fn peer_group_routes_messages_only_within_resolved_peer_set() {
     );
 
     let cfg = Arc::new(cfg);
-    let tool = SendMessageToPeerTool::new(cfg.clone(), "alpha");
-
+    let tool = SendMessageToPeerTool::new(cfg.clone(), "alpha", None);
     let to_gamma = tool
         .execute(json!({
             "channel": "telegram.prod",
@@ -350,7 +349,7 @@ async fn peer_group_dotted_channel_refs_remain_alias_scoped_for_dispatch() {
     );
 
     let cfg = Arc::new(cfg);
-    let tool = SendMessageToPeerTool::new(cfg, "alpha");
+    let tool = SendMessageToPeerTool::new(cfg, "alpha", None);
     let prod = tool
         .execute(json!({
             "channel": "telegram.prod",

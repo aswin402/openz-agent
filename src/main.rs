@@ -391,8 +391,9 @@ async fn main() -> Result<()> {
         if config.gateway.gateway_mode == "cli" {
             println!("\x1B[1m\x1B[38;2;139;92;246msetting up gateway...\x1B[0m");
             zeroclaw_tools::mcp_client::set_silent_mcp(true);
+            zeroclaw_channels::orchestrator::set_silent_channels(true);
             let handle = maybe_start_background_daemon(&config);
-            
+
             // Dynamically wait for the gateway to start listening on its configured port
             let host = &config.gateway.host;
             let port = config.gateway.port;
@@ -404,21 +405,37 @@ async fn main() -> Result<()> {
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
-            
+
             // Allow a small extra delay for any trailing log prints from channels/supervisors
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            
+
             println!("\x1B[1m\x1B[38;2;139;92;246msuccessfully started gateway...\x1B[0m");
-            
+
             // Connect to MCP servers once in the main thread to show clean startup sequence
             zeroclaw_tools::mcp_client::set_silent_mcp(false);
             if config.mcp.enabled && !config.mcp.servers.is_empty() {
-                let _ = zeroclaw_tools::mcp_client::McpRegistry::connect_all(&config.mcp.servers, false).await;
+                let _ = zeroclaw_tools::mcp_client::McpRegistry::connect_all(
+                    &config.mcp.servers,
+                    false,
+                )
+                .await;
             }
             zeroclaw_tools::mcp_client::set_silent_mcp(true);
-            
+
             handle
         } else {
+            if std::io::stdout().is_terminal() {
+                println!("\x1B[1m\x1B[38;2;139;92;246msetting up servers...\x1B[0m");
+                zeroclaw_tools::mcp_client::set_silent_mcp(false);
+                if config.mcp.enabled && !config.mcp.servers.is_empty() {
+                    let _ = zeroclaw_tools::mcp_client::McpRegistry::connect_all(
+                        &config.mcp.servers,
+                        false,
+                    )
+                    .await;
+                }
+                zeroclaw_tools::mcp_client::set_silent_mcp(true);
+            }
             maybe_start_background_daemon(&config)
         }
     };
@@ -809,9 +826,7 @@ fn get_models_list_for_family(family: &str) -> Vec<&'static str> {
             "mistral-nemo",
             "pixtral-12b",
         ],
-        "z.ai" | "zai" => vec![
-            "glm-4.7",
-        ],
+        "z.ai" | "zai" => vec!["glm-4.7"],
         "opencode" => vec![
             "deepseek-v4-flash-free",
             "minimax-m2.5-free",
@@ -843,9 +858,7 @@ fn get_models_list_for_family(family: &str) -> Vec<&'static str> {
             "google/gemma-4-31b-it",
             "mistralai/mistral-nemotron",
         ],
-        "minimax" => vec![
-            "MiniMax-M2.7",
-        ],
+        "minimax" => vec!["MiniMax-M2.7"],
         _ => vec![],
     }
 }
@@ -1924,7 +1937,8 @@ async fn select_subagent_model(
                         if focus == Focus::Left {
                             left_str = format!(" ❯ \x1B[1m\x1B[38;2;139;92;246m{}\x1B[0m", fam);
                         } else {
-                            left_str = format!("   \x1B[1m\x1B[38;2;113;113;122m{} (active)\x1B[0m", fam);
+                            left_str =
+                                format!("   \x1B[1m\x1B[38;2;113;113;122m{} (active)\x1B[0m", fam);
                         }
                     } else {
                         left_str = format!("   {}", fam);
@@ -1932,9 +1946,12 @@ async fn select_subagent_model(
                 } else if i == configured_families.len() {
                     if i == selected_left_idx {
                         if focus == Focus::Left {
-                            left_str = format!(" ❯ \x1B[1m\x1B[38;2;139;92;246mCustom Model ID\x1B[0m");
+                            left_str =
+                                format!(" ❯ \x1B[1m\x1B[38;2;139;92;246mCustom Model ID\x1B[0m");
                         } else {
-                            left_str = format!("   \x1B[1m\x1B[38;2;113;113;122mCustom Model ID (active)\x1B[0m");
+                            left_str = format!(
+                                "   \x1B[1m\x1B[38;2;113;113;122mCustom Model ID (active)\x1B[0m"
+                            );
                         }
                     } else {
                         left_str = format!("   Custom Model ID");
@@ -1954,7 +1971,9 @@ async fn select_subagent_model(
                 } else {
                     if i == 0 {
                         if focus == Focus::Right {
-                            right_str = " ❯ \x1B[1m\x1B[38;2;249;115;22m[Input Custom Model ID]\x1B[0m".to_string();
+                            right_str =
+                                " ❯ \x1B[1m\x1B[38;2;249;115;22m[Input Custom Model ID]\x1B[0m"
+                                    .to_string();
                         } else {
                             right_str = "   [Input Custom Model ID]".to_string();
                         }
@@ -2023,7 +2042,11 @@ async fn select_subagent_model(
                                     needs_redraw = true;
                                 }
                             } else {
-                                let max_r = if active_family.is_some() { right_models.len() } else { 1 };
+                                let max_r = if active_family.is_some() {
+                                    right_models.len()
+                                } else {
+                                    1
+                                };
                                 if max_r > 0 && selected_right_idx < max_r - 1 {
                                     selected_right_idx += 1;
                                     needs_redraw = true;
@@ -2098,7 +2121,10 @@ async fn select_subagent_model(
                                         let (_, model_id) = &right_models[selected_right_idx];
                                         if model_id == "Custom Model ID" {
                                             let custom_id: String = dialoguer::Input::new()
-                                                .with_prompt(format!("Enter Custom Model ID for {}", fam))
+                                                .with_prompt(format!(
+                                                    "Enter Custom Model ID for {}",
+                                                    fam
+                                                ))
                                                 .interact_text()?;
                                             let model_id = custom_id.trim().to_string();
                                             if model_id.is_empty() {

@@ -3216,6 +3216,13 @@ pub struct AgentRunOverrides {
     /// CLI-launched agents at depth 0.
     pub is_subagent: bool,
     pub tui_sender: Option<tokio::sync::mpsc::Sender<crate::agent::tui_events::RuntimeEvent>>,
+    /// Shared MCP registry from the parent agent. When set, the child
+    /// run reuses the parent's MCP server connections instead of
+    /// spawning duplicate subprocesses (saving hundreds of MBs of RAM).
+    /// Default `None` means the child connects to MCP servers fresh.
+    pub mcp_registry: Option<std::sync::Arc<crate::tools::McpRegistry>>,
+    /// Optional list of MCP server names this run is allowed to access.
+    pub allowed_mcp_servers: Option<std::collections::HashSet<String>>,
 }
 
 pub fn run_boxed<'a>(
@@ -3354,6 +3361,66 @@ pub async fn run(
             );
         }
 
+        // ── MCP registry: connect once, share across tools and subagents ──
+        // Connect to MCP servers before building the tool registry so
+        // subagent spawns can reuse the parent's connections instead of
+        // duplicating MCP server processes (saves hundreds of MBs of RAM).
+        let mcp_registry: Option<std::sync::Arc<crate::tools::McpRegistry>> =
+            if let Some(ref parent_mcp) = overrides.mcp_registry {
+                ::zeroclaw_log::record!(
+                    INFO,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                    &format!(
+                        "MCP: reusing parent registry ({} servers, {} tools)",
+                        parent_mcp.server_count(),
+                        parent_mcp.tool_count(),
+                    )
+                );
+                Some(std::sync::Arc::clone(parent_mcp))
+            } else if config.mcp.enabled && !config.mcp.servers.is_empty() {
+                ::zeroclaw_log::record!(
+                    INFO,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                    &format!(
+                        "Initializing MCP client — {} server(s) configured",
+                        config.mcp.servers.len()
+                    )
+                );
+                match crate::tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
+                    Ok(registry) => {
+                        let registry = std::sync::Arc::new(registry);
+                        ::zeroclaw_log::record!(
+                            INFO,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Note
+                            ),
+                            &format!(
+                                "MCP connected: {} server(s), {} tool(s)",
+                                registry.server_count(),
+                                registry.tool_count(),
+                            )
+                        );
+                        Some(registry)
+                    }
+                    Err(e) => {
+                        ::zeroclaw_log::record!(
+                            ERROR,
+                            ::zeroclaw_log::Event::new(
+                                module_path!(),
+                                ::zeroclaw_log::Action::Fail
+                            )
+                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
+                            "MCP registry failed to initialize"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
         // ── Tools (including memory tools and peripherals) ────────────
         let (composio_key, composio_entity_id) = if config.composio.enabled {
             (
@@ -3388,6 +3455,7 @@ pub async fn run(
             &config,
             None,
             is_subagent_caller,
+            mcp_registry.clone(),
         );
 
         let peripheral_tools: Vec<Box<dyn Tool>> = if let Some(f) = PERIPHERAL_TOOLS_FN.get() {
@@ -3432,101 +3500,69 @@ pub async fn run(
             );
         }
 
-        // ── Wire MCP tools (non-fatal) — CLI path ────────────────────
-        // NOTE: MCP tools are injected after built-in tool filtering
-        // (filter_primary_agent_tools_or_fail / agent.allowed_tools / agent.denied_tools).
-        // MCP servers are user-declared external integrations; the built-in allow/deny
-        // filter is not appropriate for them and would silently drop all MCP tools when
-        // a restrictive allowlist is configured. Keep this block after any such filter call.
-        //
-        // When `deferred_loading` is enabled, MCP tools are NOT added to the registry
-        // eagerly. Instead, a `tool_search` built-in is registered so the LLM can
-        // fetch schemas on demand. This reduces context window waste.
+        // ── Wire MCP tools into the registry ────────────────────────
+        // Uses the already-connected mcp_registry (fresh or inherited from parent).
+        // MCP tools are injected after built-in tool filtering because MCP servers
+        // are user-declared external integrations — the built-in allow/deny filter
+        // is not appropriate for them and would silently drop all MCP tools when
+        // a restrictive allowlist is configured.
         let mut deferred_section = String::new();
         let mut activated_handle: Option<
             std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>,
         > = None;
-        if config.mcp.enabled && !config.mcp.servers.is_empty() {
-            ::zeroclaw_log::record!(
-                INFO,
-                ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
-                &format!(
-                    "Initializing MCP client — {} server(s) configured",
-                    config.mcp.servers.len()
+        if let Some(registry) = mcp_registry {
+            if config.mcp.deferred_loading {
+                let mut deferred_set = crate::tools::DeferredMcpToolSet::from_registry(
+                    std::sync::Arc::clone(&registry),
                 )
-            );
-            match crate::tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
-                Ok(registry) => {
-                    let registry = std::sync::Arc::new(registry);
-                    if config.mcp.deferred_loading {
-                        // Deferred path: build stubs and register tool_search
-                        let deferred_set = crate::tools::DeferredMcpToolSet::from_registry(
-                            std::sync::Arc::clone(&registry),
-                        )
-                        .await;
-                        ::zeroclaw_log::record!(
-                            INFO,
-                            ::zeroclaw_log::Event::new(
-                                module_path!(),
-                                ::zeroclaw_log::Action::Note
-                            ),
-                            &format!(
-                                "MCP deferred: {} tool stub(s) from {} server(s)",
-                                deferred_set.len(),
-                                registry.server_count()
-                            )
-                        );
-                        deferred_section =
-                            crate::tools::build_deferred_tools_section(&deferred_set);
-                        let activated = std::sync::Arc::new(std::sync::Mutex::new(
-                            crate::tools::ActivatedToolSet::new(),
-                        ));
-                        activated_handle = Some(std::sync::Arc::clone(&activated));
-                        tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
-                            deferred_set,
-                            activated,
-                        )));
-                    } else {
-                        // Eager path: register all MCP tools directly
-                        let names = registry.tool_names();
-                        let mut registered = 0usize;
-                        for name in names {
-                            if let Some(def) = registry.get_tool_def(&name).await {
-                                let wrapper: std::sync::Arc<dyn Tool> =
-                                    std::sync::Arc::new(crate::tools::McpToolWrapper::new(
-                                        name,
-                                        def,
-                                        std::sync::Arc::clone(&registry),
-                                    ));
-                                if let Some(ref handle) = delegate_handle {
-                                    handle.write().push(std::sync::Arc::clone(&wrapper));
-                                }
-                                tools_registry.push(Box::new(crate::tools::ArcToolRef(wrapper)));
-                                registered += 1;
+                .await;
+                if let Some(ref allowed_servers) = overrides.allowed_mcp_servers {
+                    let mut filtered_stubs = Vec::new();
+                    for stub in deferred_set.stubs {
+                        if let Some(server_name) =
+                            registry.get_server_name_for_tool(&stub.prefixed_name).await
+                        {
+                            if allowed_servers.contains(&server_name) {
+                                filtered_stubs.push(stub);
                             }
                         }
-                        ::zeroclaw_log::record!(
-                            INFO,
-                            ::zeroclaw_log::Event::new(
-                                module_path!(),
-                                ::zeroclaw_log::Action::Note
-                            ),
-                            &format!(
-                                "MCP: {} tool(s) registered from {} server(s)",
-                                registered,
-                                registry.server_count()
-                            )
-                        );
                     }
+                    deferred_set.stubs = filtered_stubs;
                 }
-                Err(e) => {
-                    ::zeroclaw_log::record!(
-                        ERROR,
-                        ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
-                            .with_outcome(::zeroclaw_log::EventOutcome::Failure)
-                            .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
-                        "MCP registry failed to initialize"
-                    );
+                deferred_section = crate::tools::build_deferred_tools_section(&deferred_set);
+                let activated = std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::tools::ActivatedToolSet::new(),
+                ));
+                activated_handle = Some(std::sync::Arc::clone(&activated));
+                tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
+                    deferred_set,
+                    activated,
+                )));
+            } else {
+                let names = registry.tool_names();
+                for name in names {
+                    let mut allowed = true;
+                    if let Some(ref allowed_servers) = overrides.allowed_mcp_servers {
+                        if let Some(server_name) = registry.get_server_name_for_tool(&name).await {
+                            if !allowed_servers.contains(&server_name) {
+                                allowed = false;
+                            }
+                        }
+                    }
+                    if allowed {
+                        if let Some(def) = registry.get_tool_def(&name).await {
+                            let wrapper: std::sync::Arc<dyn Tool> =
+                                std::sync::Arc::new(crate::tools::McpToolWrapper::new(
+                                    name,
+                                    def,
+                                    std::sync::Arc::clone(&registry),
+                                ));
+                            if let Some(ref handle) = delegate_handle {
+                                handle.write().push(std::sync::Arc::clone(&wrapper));
+                            }
+                            tools_registry.push(Box::new(crate::tools::ArcToolRef(wrapper)));
+                        }
+                    }
                 }
             }
         }
@@ -4136,7 +4172,7 @@ pub async fn run(
             observer.record_event(&ObserverEvent::TurnComplete);
         } else {
             // Clear the screen cleanly before showing the ASCII art logo and start prompt
-            print!("\x1B[2J\x1B[1;1H");
+            print!("\x1Bc");
             let _ = std::io::stdout().flush();
 
             println!(
@@ -4296,6 +4332,7 @@ pub async fn run(
                     &config,
                     None,
                     is_subagent_caller,
+                    None,
                 );
 
                 let peripheral_tools: Vec<Box<dyn Tool>> =
@@ -4954,7 +4991,7 @@ pub async fn run(
                                 continue;
                             }
 
-                            print!("\x1B[2J\x1B[1;1H");
+                            print!("\x1Bc");
                             let _ = std::io::stdout().flush();
 
                             history.clear();
@@ -6254,6 +6291,7 @@ pub async fn process_message(
     agent_alias: &str,
     message: &str,
     session_id: Option<&str>,
+    mcp_registry: Option<std::sync::Arc<crate::tools::McpRegistry>>,
 ) -> Result<String> {
     use ::zeroclaw_log::Instrument;
     let agent = config
@@ -6369,6 +6407,7 @@ pub async fn process_message(
             &config,
             None,
             false,
+            mcp_registry.clone(),
         );
         let peripheral_tools: Vec<Box<dyn Tool>> = if let Some(f) = PERIPHERAL_TOOLS_FN.get() {
             f(config.peripherals.clone()).await.unwrap_or_default()
@@ -6385,7 +6424,12 @@ pub async fn process_message(
         let mut activated_handle_pm: Option<
             std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>,
         > = None;
-        if config.mcp.enabled && !config.mcp.servers.is_empty() {
+
+        let mcp_registry: Option<std::sync::Arc<crate::tools::McpRegistry>> = if let Some(ref reg) =
+            mcp_registry
+        {
+            Some(std::sync::Arc::clone(reg))
+        } else if config.mcp.enabled && !config.mcp.servers.is_empty() {
             ::zeroclaw_log::record!(
                 INFO,
                 ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
@@ -6395,67 +6439,7 @@ pub async fn process_message(
                 )
             );
             match crate::tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
-                Ok(registry) => {
-                    let registry = std::sync::Arc::new(registry);
-                    if config.mcp.deferred_loading {
-                        let deferred_set = crate::tools::DeferredMcpToolSet::from_registry(
-                            std::sync::Arc::clone(&registry),
-                        )
-                        .await;
-                        ::zeroclaw_log::record!(
-                            INFO,
-                            ::zeroclaw_log::Event::new(
-                                module_path!(),
-                                ::zeroclaw_log::Action::Note
-                            ),
-                            &format!(
-                                "MCP deferred: {} tool stub(s) from {} server(s)",
-                                deferred_set.len(),
-                                registry.server_count()
-                            )
-                        );
-                        deferred_section =
-                            crate::tools::build_deferred_tools_section(&deferred_set);
-                        let activated = std::sync::Arc::new(std::sync::Mutex::new(
-                            crate::tools::ActivatedToolSet::new(),
-                        ));
-                        activated_handle_pm = Some(std::sync::Arc::clone(&activated));
-                        tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
-                            deferred_set,
-                            activated,
-                        )));
-                    } else {
-                        let names = registry.tool_names();
-                        let mut registered = 0usize;
-                        for name in names {
-                            if let Some(def) = registry.get_tool_def(&name).await {
-                                let wrapper: std::sync::Arc<dyn Tool> =
-                                    std::sync::Arc::new(crate::tools::McpToolWrapper::new(
-                                        name,
-                                        def,
-                                        std::sync::Arc::clone(&registry),
-                                    ));
-                                if let Some(ref handle) = delegate_handle_pm {
-                                    handle.write().push(std::sync::Arc::clone(&wrapper));
-                                }
-                                tools_registry.push(Box::new(crate::tools::ArcToolRef(wrapper)));
-                                registered += 1;
-                            }
-                        }
-                        ::zeroclaw_log::record!(
-                            INFO,
-                            ::zeroclaw_log::Event::new(
-                                module_path!(),
-                                ::zeroclaw_log::Action::Note
-                            ),
-                            &format!(
-                                "MCP: {} tool(s) registered from {} server(s)",
-                                registered,
-                                registry.server_count()
-                            )
-                        );
-                    }
-                }
+                Ok(registry) => Some(std::sync::Arc::new(registry)),
                 Err(e) => {
                     ::zeroclaw_log::record!(
                         ERROR,
@@ -6464,7 +6448,64 @@ pub async fn process_message(
                             .with_attrs(::serde_json::json!({"error": format!("{}", e)})),
                         "MCP registry failed to initialize"
                     );
+                    None
                 }
+            }
+        } else {
+            None
+        };
+
+        if let Some(registry) = mcp_registry {
+            if config.mcp.deferred_loading {
+                let deferred_set = crate::tools::DeferredMcpToolSet::from_registry(
+                    std::sync::Arc::clone(&registry),
+                )
+                .await;
+                ::zeroclaw_log::record!(
+                    INFO,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                    &format!(
+                        "MCP deferred: {} tool stub(s) from {} server(s)",
+                        deferred_set.len(),
+                        registry.server_count()
+                    )
+                );
+                deferred_section = crate::tools::build_deferred_tools_section(&deferred_set);
+                let activated = std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::tools::ActivatedToolSet::new(),
+                ));
+                activated_handle_pm = Some(std::sync::Arc::clone(&activated));
+                tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
+                    deferred_set,
+                    activated,
+                )));
+            } else {
+                let names = registry.tool_names();
+                let mut registered = 0usize;
+                for name in names {
+                    if let Some(def) = registry.get_tool_def(&name).await {
+                        let wrapper: std::sync::Arc<dyn Tool> =
+                            std::sync::Arc::new(crate::tools::McpToolWrapper::new(
+                                name,
+                                def,
+                                std::sync::Arc::clone(&registry),
+                            ));
+                        if let Some(ref handle) = delegate_handle_pm {
+                            handle.write().push(std::sync::Arc::clone(&wrapper));
+                        }
+                        tools_registry.push(Box::new(crate::tools::ArcToolRef(wrapper)));
+                        registered += 1;
+                    }
+                }
+                ::zeroclaw_log::record!(
+                    INFO,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note),
+                    &format!(
+                        "MCP: {} tool(s) registered from {} server(s)",
+                        registered,
+                        registry.server_count()
+                    )
+                );
             }
         }
 

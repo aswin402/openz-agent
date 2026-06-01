@@ -125,6 +125,7 @@ pub use zeroclaw_api::schema::{CleaningStrategy, SchemaCleanr};
 pub use zeroclaw_api::tool::{Tool, ToolResult, ToolSpec};
 
 // Local tool re-exports (tools with root deps, kept in misc)
+use crate::tools::spawn_subagent::SpawnSubagentTool;
 pub use cron_add::CronAddTool;
 pub use cron_list::CronListTool;
 pub use cron_remove::CronRemoveTool;
@@ -146,7 +147,6 @@ pub use sop_approve::SopApproveTool;
 pub use sop_execute::SopExecuteTool;
 pub use sop_list::SopListTool;
 pub use sop_status::SopStatusTool;
-pub use spawn_subagent::SpawnSubagentTool;
 pub use verifiable_intent::VerifiableIntentTool;
 
 use crate::platform::{NativeRuntime, RuntimeAdapter};
@@ -363,6 +363,7 @@ pub fn all_tools(
     root_config: &zeroclaw_config::schema::Config,
     canvas_store: Option<CanvasStore>,
     is_subagent_caller: bool,
+    mcp_registry: Option<Arc<McpRegistry>>,
 ) -> (
     Vec<Box<dyn Tool>>,
     Option<DelegateParentToolsHandle>,
@@ -389,6 +390,7 @@ pub fn all_tools(
         root_config,
         canvas_store,
         is_subagent_caller,
+        mcp_registry,
     )
 }
 
@@ -416,6 +418,7 @@ pub fn all_tools_with_runtime(
     root_config: &zeroclaw_config::schema::Config,
     canvas_store: Option<CanvasStore>,
     is_subagent_caller: bool,
+    mcp_registry: Option<Arc<McpRegistry>>,
 ) -> (
     Vec<Box<dyn Tool>>,
     Option<DelegateParentToolsHandle>,
@@ -482,12 +485,17 @@ pub fn all_tools_with_runtime(
             agent_alias,
         )),
         Arc::new(
-            SpawnSubagentTool::new(Arc::new(root_config.clone()), agent_alias)
-                .with_subagent_caller(is_subagent_caller),
+            SpawnSubagentTool::new(
+                Arc::new(root_config.clone()),
+                agent_alias,
+                mcp_registry.clone(),
+            )
+            .with_subagent_caller(is_subagent_caller),
         ),
         Arc::new(SendMessageToPeerTool::new(
             Arc::new(root_config.clone()),
             agent_alias,
+            mcp_registry.clone(),
         )),
         Arc::new(ModelRoutingConfigTool::new(
             config.clone(),
@@ -1269,6 +1277,7 @@ mod tests {
             &cfg,
             None,
             false,
+            None,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"browser_open"));
@@ -1315,6 +1324,7 @@ mod tests {
             &cfg,
             None,
             false,
+            None,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"browser_open"));
@@ -1462,6 +1472,7 @@ mod tests {
             &cfg,
             None,
             false,
+            None,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"delegate"));
@@ -1499,6 +1510,7 @@ mod tests {
             &cfg,
             None,
             false,
+            None,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"delegate"));
@@ -1538,6 +1550,7 @@ mod tests {
             &cfg,
             None,
             false,
+            None,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"read_skill"));
@@ -1576,6 +1589,7 @@ mod tests {
             &cfg,
             None,
             false,
+            None,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"read_skill"));

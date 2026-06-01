@@ -3763,7 +3763,7 @@ impl Default for McpConfig {
             ..Default::default()
         });
 
-        // 4. puppeteer (always enabled)
+        // 4. puppeteer (disabled by default — launches a Chrome/Chromium subprocess)
         servers.push(McpServerConfig {
             name: "puppeteer".to_string(),
             transport: McpTransport::Stdio,
@@ -3772,11 +3772,11 @@ impl Default for McpConfig {
                 "-y".to_string(),
                 "@modelcontextprotocol/server-puppeteer".to_string(),
             ],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
-        // 5. memory (always enabled)
+        // 5. memory (disabled by default — runbook memory uses native Zeroclaw backends)
         servers.push(McpServerConfig {
             name: "memory".to_string(),
             transport: McpTransport::Stdio,
@@ -3785,7 +3785,7 @@ impl Default for McpConfig {
                 "-y".to_string(),
                 "@modelcontextprotocol/server-memory".to_string(),
             ],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
@@ -3846,13 +3846,13 @@ impl Default for McpConfig {
             ..Default::default()
         });
 
-        // 11. pulsemcp (always enabled)
+        // 11. pulsemcp (disabled by default — heavy Node process)
         servers.push(McpServerConfig {
             name: "pulsemcp".to_string(),
             transport: McpTransport::Stdio,
             command: "npx".to_string(),
             args: vec!["-y".to_string(), "pulsemcp-server".to_string()],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
@@ -3899,7 +3899,7 @@ impl Default for McpConfig {
             ..Default::default()
         });
 
-        // 16. ast-grep (always enabled)
+        // 16. ast-grep (disabled by default — heavy Rust binary)
         servers.push(McpServerConfig {
             name: "ast-grep".to_string(),
             transport: McpTransport::Stdio,
@@ -3909,7 +3909,7 @@ impl Default for McpConfig {
                 "git+https://github.com/ast-grep/ast-grep-mcp".to_string(),
                 "ast-grep-server".to_string(),
             ],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
@@ -3927,43 +3927,42 @@ impl Default for McpConfig {
             ..Default::default()
         });
 
-        // 18. playwright (always enabled)
         servers.push(McpServerConfig {
             name: "playwright".to_string(),
             transport: McpTransport::Stdio,
             command: "npx".to_string(),
             args: vec!["-y".to_string(), "@playwright/mcp".to_string()],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
-        // 19. repomix (always enabled)
+        // 19. repomix (disabled by default — large dependency install)
         servers.push(McpServerConfig {
             name: "repomix".to_string(),
             transport: McpTransport::Stdio,
             command: "npx".to_string(),
             args: vec!["-y".to_string(), "repomix".to_string(), "--mcp".to_string()],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
-        // 20. chromadb (always enabled)
+        // 20. chromadb (disabled by default — heavy Python/ChromaDB subprocess)
         servers.push(McpServerConfig {
             name: "chromadb".to_string(),
             transport: McpTransport::Stdio,
             command: "uvx".to_string(),
             args: vec!["chroma-mcp".to_string()],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
-        // 21. docker (always enabled)
+        // 21. docker (disabled by default — heavy Node process)
         servers.push(McpServerConfig {
             name: "docker".to_string(),
             transport: McpTransport::Stdio,
             command: "npx".to_string(),
             args: vec!["-y".to_string(), "@0xshariq/docker-mcp-server".to_string()],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
@@ -3977,7 +3976,7 @@ impl Default for McpConfig {
             ..Default::default()
         });
 
-        // 23. duckdb (always enabled)
+        // 23. duckdb (disabled by default — heavy Python subprocess)
         servers.push(McpServerConfig {
             name: "duckdb".to_string(),
             transport: McpTransport::Stdio,
@@ -3987,7 +3986,7 @@ impl Default for McpConfig {
                 "--db-path".to_string(),
                 ":memory:".to_string(),
             ],
-            enabled: true,
+            enabled: false,
             ..Default::default()
         });
 
@@ -4745,11 +4744,11 @@ fn default_agent_max_tool_iterations() -> usize {
 }
 
 fn default_agent_max_history_messages() -> usize {
-    50
+    25
 }
 
 fn default_agent_max_context_tokens() -> usize {
-    32_000
+    64_000
 }
 
 fn default_agent_tool_dispatcher() -> String {
@@ -4757,7 +4756,7 @@ fn default_agent_tool_dispatcher() -> String {
 }
 
 fn default_max_system_prompt_chars() -> usize {
-    0
+    24_000
 }
 
 // ── Pacing ────────────────────────────────────────────────────────
@@ -17043,7 +17042,7 @@ reasoning_effort = "turbo"
         let cfg = AliasedAgentConfig::default();
         assert!(cfg.compact_context);
         assert_eq!(cfg.max_tool_iterations, 10);
-        assert_eq!(cfg.max_history_messages, 50);
+        assert_eq!(cfg.max_history_messages, 25);
         assert!(!cfg.parallel_tools);
         assert_eq!(cfg.tool_dispatcher, "auto");
         assert!(!cfg.strict_tool_parsing);

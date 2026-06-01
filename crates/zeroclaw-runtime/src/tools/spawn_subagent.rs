@@ -7,6 +7,7 @@
 
 use crate::agent::loop_::AgentRunOverrides;
 use crate::subagent::{SubAgentOverrides, SubAgentSpawn};
+use crate::tools::McpRegistry;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
@@ -20,6 +21,9 @@ use zeroclaw_log::scope;
 pub struct SpawnSubagentTool {
     config: Arc<Config>,
     parent_alias: String,
+    /// Shared MCP registry from the parent agent — passed so the subagent
+    /// doesn't re-spawn MCP server processes.
+    mcp_registry: Option<Arc<McpRegistry>>,
     /// `true` when this tool is registered inside a run that is itself
     /// a SubAgent. Triggers a depth-1 cap refusal in `execute` before
     /// any spawn work happens. Set by the agent loop from
@@ -28,10 +32,15 @@ pub struct SpawnSubagentTool {
 }
 
 impl SpawnSubagentTool {
-    pub fn new(config: Arc<Config>, parent_alias: impl Into<String>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        parent_alias: impl Into<String>,
+        mcp_registry: Option<Arc<McpRegistry>>,
+    ) -> Self {
         Self {
             config,
             parent_alias: parent_alias.into(),
+            mcp_registry,
             is_subagent_caller: false,
         }
     }
@@ -45,6 +54,10 @@ impl SpawnSubagentTool {
         self
     }
 }
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static ACTIVE_SUBAGENTS: AtomicUsize = AtomicUsize::new(0);
 
 #[async_trait]
 impl Tool for SpawnSubagentTool {
@@ -69,6 +82,13 @@ impl Tool for SpawnSubagentTool {
                 "prompt": {
                     "type": "string",
                     "description": "The task or question for the SubAgent. Be specific and self-contained — the SubAgent does not see this conversation's history."
+                },
+                "allowed_mcp_servers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Optional list of MCP server names that this subagent is allowed to access (e.g. ['wikipedia', 'git']). If omitted, the subagent gets access to all parent MCP tools."
                 }
             },
             "required": ["prompt"]
@@ -76,6 +96,28 @@ impl Tool for SpawnSubagentTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
+        // Enforce the concurrency limit: max 2 active subagents spawned simultaneously
+        let active = ACTIVE_SUBAGENTS.load(Ordering::SeqCst);
+        if active >= 2 {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "spawn_subagent: refused — maximum concurrent subagent limit reached (active: {active}/2)"
+                )),
+            });
+        }
+
+        // Increment active subagents count and use a guard to automatically decrement on exit
+        ACTIVE_SUBAGENTS.fetch_add(1, Ordering::SeqCst);
+        struct ActiveGuard;
+        impl Drop for ActiveGuard {
+            fn drop(&mut self) {
+                ACTIVE_SUBAGENTS.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let _guard = ActiveGuard;
+
         // Depth-1 cap: a SubAgent may not spawn its own subagents.
         // The caller-side flag is set at registry construction time
         // from `AgentRunOverrides.is_subagent`, so the refusal fires
@@ -135,6 +177,15 @@ impl Tool for SpawnSubagentTool {
             }
         };
 
+        let allowed_mcp_servers: Option<std::collections::HashSet<String>> = args
+            .get("allowed_mcp_servers")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|val| val.as_str().map(|s| s.to_string()))
+                    .collect()
+            });
+
         let subagent_ctx = match SubAgentSpawn::for_agent(&self.config, &self.parent_alias)
             .and_then(|spawn| spawn.build(SubAgentOverrides::default()))
         {
@@ -166,6 +217,8 @@ impl Tool for SpawnSubagentTool {
             memory: None,
             is_subagent: true,
             tui_sender: None,
+            mcp_registry: self.mcp_registry.clone(),
+            allowed_mcp_servers,
         };
         let parent_alias = subagent_ctx.parent_alias.clone();
         let run_result = Box::pin(scope!(
@@ -229,7 +282,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_or_missing_prompt_is_rejected() {
-        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha");
+        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha", None);
         for args in [json!({}), json!({ "prompt": "   " })] {
             let result = tool
                 .execute(args)
@@ -253,7 +306,7 @@ mod tests {
         // Parent alias that is not configured: SubAgentSpawn::for_agent
         // returns Err, the tool reports a structured spawn failure
         // (no panic, no recursion attempt).
-        let tool = SpawnSubagentTool::new(Arc::new(Config::default()), "missing-alpha");
+        let tool = SpawnSubagentTool::new(Arc::new(Config::default()), "missing-alpha", None);
         let result = tool
             .execute(json!({ "prompt": "hello" }))
             .await
@@ -274,7 +327,7 @@ mod tests {
 
     #[tokio::test]
     async fn refuses_recursive_spawn_when_caller_is_subagent() {
-        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha")
+        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha", None)
             .with_subagent_caller(true);
         let result = tool
             .execute(json!({ "prompt": "hello" }))
@@ -294,7 +347,7 @@ mod tests {
         // (e.g. no model provider configured in this minimal harness),
         // but it MUST NOT trip the depth-cap refusal. Pin that the
         // depth-cap error is absent.
-        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha")
+        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha", None)
             .with_subagent_caller(false);
         let result = tool
             .execute(json!({ "prompt": "hello" }))
@@ -334,7 +387,7 @@ mod tests {
         // the tool itself refuses pre-spawn so the dispatch-site filter
         // doesn't have to be the only line of defense.
         let config = config_with_allowed_tools("alpha", vec!["shell".into()]);
-        let tool = SpawnSubagentTool::new(Arc::new(config), "alpha");
+        let tool = SpawnSubagentTool::new(Arc::new(config), "alpha", None);
         let result = tool
             .execute(json!({ "prompt": "hello" }))
             .await
@@ -355,7 +408,7 @@ mod tests {
         // the gate refusal is absent.
         let config =
             config_with_allowed_tools("alpha", vec!["spawn_subagent".into(), "shell".into()]);
-        let tool = SpawnSubagentTool::new(Arc::new(config), "alpha");
+        let tool = SpawnSubagentTool::new(Arc::new(config), "alpha", None);
         let result = tool
             .execute(json!({ "prompt": "hello" }))
             .await
@@ -403,6 +456,7 @@ mod tests {
         let tool: Box<dyn Tool> = Box::new(SpawnSubagentTool::new(
             Arc::new(config_with_agent("alpha")),
             "alpha",
+            None,
         ));
         assert_eq!(
             Attributable::role(tool.as_ref()),
@@ -413,5 +467,26 @@ mod tests {
             !Attributable::alias(tool.as_ref()).is_empty(),
             "Attributable::alias on a Tool must be non-empty so composite keys never produce `.<bare>`"
         );
+    }
+
+    #[tokio::test]
+    async fn enforces_concurrency_limit() {
+        ACTIVE_SUBAGENTS.store(2, Ordering::SeqCst);
+        let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha", None);
+        let result = tool
+            .execute(json!({ "prompt": "hello" }))
+            .await
+            .expect("execute returns Ok");
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("maximum concurrent subagent limit reached"),
+            "expected concurrency refusal, got: {:?}",
+            result.error
+        );
+        ACTIVE_SUBAGENTS.store(0, Ordering::SeqCst);
     }
 }

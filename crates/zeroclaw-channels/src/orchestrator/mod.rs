@@ -6688,6 +6688,16 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
     Ok(())
 }
 
+static SILENT_CHANNELS: AtomicBool = AtomicBool::new(false);
+
+pub fn set_silent_channels(silent: bool) {
+    SILENT_CHANNELS.store(silent, Ordering::Relaxed);
+}
+
+pub fn is_silent_channels() -> bool {
+    SILENT_CHANNELS.load(Ordering::Relaxed)
+}
+
 /// Start all configured channels and route messages to the agent
 #[allow(clippy::too_many_lines)]
 pub async fn start_channels(
@@ -6931,6 +6941,7 @@ pub async fn start_channels(
             &config,
             canvas_store.clone(),
             false,
+            None, // no parent MCP registry to share (channel orchestrator is top-level)
         );
 
         // Wire MCP tools into the per-agent registry before freezing —
@@ -6950,7 +6961,8 @@ pub async fn start_channels(
                     config.mcp.servers.len()
                 )
             );
-            match zeroclaw_runtime::tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
+            match zeroclaw_runtime::tools::McpRegistry::connect_all(&config.mcp.servers, true).await
+            {
                 Ok(registry) => {
                     let registry = std::sync::Arc::new(registry);
                     if config.mcp.deferred_loading {
@@ -7167,7 +7179,7 @@ pub async fn start_channels(
         // require a future per-channel `tool_specs` lookup (tracked
         // alongside the per-channel ChannelRuntimeContext follow-up).
         if channels_by_name_shared.is_none() {
-            if !skills.is_empty() {
+            if !skills.is_empty() && !is_silent_channels() {
                 let is_cli = config.gateway.gateway_mode == "cli";
                 if !is_cli {
                     println!(
@@ -7215,45 +7227,57 @@ pub async fn start_channels(
                 return Ok(());
             }
 
-            let is_cli = config.gateway.gateway_mode == "cli";
-            if is_cli {
-                println!("\x1B[1m\x1B[38;2;139;92;246mmodel\x1B[0m             {model}");
-                println!("\x1B[1m\x1B[38;2;139;92;246magent\x1B[0m             {agent_alias}");
-                let auto_save = if config.memory.auto_save { "auto-save" } else { "none" };
-                println!("\x1B[1m\x1B[38;2;139;92;246mmemory\x1B[0m            {auto_save}");
-                let channel_labels: Vec<String> = configured_channels
-                    .iter()
-                    .map(|cc| composite_channel_key(cc.channel.name(), cc.alias.as_deref()))
-                    .collect();
-                println!("\x1B[1m\x1B[38;2;139;92;246mchannel\x1B[0m           {}", channel_labels.join(", "));
-                let in_flight = compute_max_in_flight_messages(channels.len());
-                println!("\x1B[1m\x1B[38;2;139;92;246minflight\x1B[0m          {in_flight}");
+            if !is_silent_channels() {
+                let is_cli = config.gateway.gateway_mode == "cli";
+                if is_cli {
+                    println!("\x1B[1m\x1B[38;2;139;92;246mmodel\x1B[0m             {model}");
+                    println!("\x1B[1m\x1B[38;2;139;92;246magent\x1B[0m             {agent_alias}");
+                    let auto_save = if config.memory.auto_save {
+                        "auto-save"
+                    } else {
+                        "none"
+                    };
+                    println!("\x1B[1m\x1B[38;2;139;92;246mmemory\x1B[0m            {auto_save}");
+                    let channel_labels: Vec<String> = configured_channels
+                        .iter()
+                        .map(|cc| composite_channel_key(cc.channel.name(), cc.alias.as_deref()))
+                        .collect();
+                    println!(
+                        "\x1B[1m\x1B[38;2;139;92;246mchannel\x1B[0m           {}",
+                        channel_labels.join(", ")
+                    );
+                    let in_flight = compute_max_in_flight_messages(channels.len());
+                    println!("\x1B[1m\x1B[38;2;139;92;246minflight\x1B[0m          {in_flight}");
+                    println!();
+                    println!(
+                        "\x1B[1m\x1B[38;2;139;92;246mready  and Skills\x1B[0m  ({} loaded)",
+                        skills.len()
+                    );
+                    println!();
+                    println!("Data • Web • Crypto • Files");
+                    println!("Communication • Maps • Automation");
+                    println!("Visualization • Media • Reporting");
+                    println!();
+                } else {
+                    println!("🦀 ZeroClaw Channel Server");
+                    println!("  🤖 Model:    {model} (agent: {agent_alias})");
+                    let effective_backend = config.resolve_active_storage().kind();
+                    println!(
+                        "  🧠 Memory:   {} (auto-save: {})",
+                        effective_backend,
+                        if config.memory.auto_save { "on" } else { "off" }
+                    );
+                    let channel_labels: Vec<String> = configured_channels
+                        .iter()
+                        .map(|cc| composite_channel_key(cc.channel.name(), cc.alias.as_deref()))
+                        .collect();
+                    println!("  📡 Channels: {}", channel_labels.join(", "));
+                    println!("  🤖 Agents:   {}", enabled_agents.join(", "));
+                    println!();
+                    println!("  Listening for messages... (Ctrl+C to stop)");
+                }
                 println!();
-                println!("\x1B[1m\x1B[38;2;139;92;246mready  and Skills\x1B[0m  ({} loaded)", skills.len());
-                println!();
-                println!("Data • Web • Crypto • Files");
-                println!("Communication • Maps • Automation");
-                println!("Visualization • Media • Reporting");
-                println!();
-            } else {
-                println!("🦀 ZeroClaw Channel Server");
-                println!("  🤖 Model:    {model} (agent: {agent_alias})");
-                let effective_backend = config.resolve_active_storage().kind();
-                println!(
-                    "  🧠 Memory:   {} (auto-save: {})",
-                    effective_backend,
-                    if config.memory.auto_save { "on" } else { "off" }
-                );
-                let channel_labels: Vec<String> = configured_channels
-                    .iter()
-                    .map(|cc| composite_channel_key(cc.channel.name(), cc.alias.as_deref()))
-                    .collect();
-                println!("  📡 Channels: {}", channel_labels.join(", "));
-                println!("  🤖 Agents:   {}", enabled_agents.join(", "));
-                println!();
-                println!("  Listening for messages... (Ctrl+C to stop)");
             }
-            println!();
 
             zeroclaw_runtime::health::mark_component_ok("channels");
 

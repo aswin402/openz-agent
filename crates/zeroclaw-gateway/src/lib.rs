@@ -394,6 +394,7 @@ pub struct AppState {
     pub observer: Arc<dyn zeroclaw_runtime::observability::Observer>,
     /// Registered tool specs (for web dashboard tools page)
     pub tools_registry: Arc<Vec<ToolSpec>>,
+    pub mcp_registry: Option<Arc<tools::McpRegistry>>,
     /// Cost tracker (optional, for web dashboard cost page)
     pub cost_tracker: Option<Arc<CostTracker>>,
     /// SSE broadcast channel for real-time events
@@ -650,6 +651,7 @@ pub async fn run_gateway(
                 &config,
                 Some(canvas_store.clone()),
                 false,
+                None,
             );
             (tools_registry_raw, delegate_handle_gw)
         }
@@ -671,6 +673,7 @@ pub async fn run_gateway(
 
     // ── Wire MCP tools into the gateway tool registry (non-fatal) ───
     // Without this, the `/api/tools` endpoint misses MCP tools.
+    let mut mcp_registry_opt = None;
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
         ::zeroclaw_log::record!(
             INFO,
@@ -683,6 +686,7 @@ pub async fn run_gateway(
         match tools::McpRegistry::connect_all(&config.mcp.servers, true).await {
             Ok(registry) => {
                 let registry = std::sync::Arc::new(registry);
+                mcp_registry_opt = Some(std::sync::Arc::clone(&registry));
                 if config.mcp.deferred_loading {
                     let deferred_set =
                         tools::DeferredMcpToolSet::from_registry(std::sync::Arc::clone(&registry))
@@ -1092,15 +1096,7 @@ pub async fn run_gateway(
     let pfx = path_prefix.unwrap_or("");
     let is_cli = config.gateway.gateway_mode == "cli";
     if is_cli {
-        println!("\x1B[1m\x1B[38;2;139;92;246mopenz gateway\x1B[0m     http://{display_addr}{pfx}");
-        println!("\x1B[1m\x1B[38;2;139;92;246mdashboard\x1B[0m         http://{display_addr}{pfx}/");
-        if let Some(code) = pairing.pairing_code() {
-            println!();
-            println!("\x1B[1m\x1B[38;2;139;92;246mpair code\x1B[0m");
-            println!();
-            println!("  \x1B[1m{code}\x1B[0m");
-        }
-        println!();
+        // Silenced in CLI mode to avoid background thread prints polluting the main TUI screen.
     } else {
         println!("🦀 ZeroClaw Gateway listening on http://{display_addr}{pfx}");
         if let Some(ref url) = tunnel_url {
@@ -1228,6 +1224,7 @@ pub async fn run_gateway(
         gmail_push: gmail_push_channel,
         observer: state_observer,
         tools_registry,
+        mcp_registry: mcp_registry_opt,
         cost_tracker,
         event_tx,
         event_buffer,
@@ -1987,7 +1984,13 @@ async fn run_gateway_chat_with_tools(
         let response = Box::pin(
             zeroclaw_runtime::agent::cost::TOOL_LOOP_COST_TRACKING_CONTEXT.scope(
                 cost_tracking_context,
-                zeroclaw_runtime::agent::process_message(config, &agent_alias, message, session_id),
+                zeroclaw_runtime::agent::process_message(
+                    config,
+                    &agent_alias,
+                    message,
+                    session_id,
+                    state.mcp_registry.clone(),
+                ),
             ),
         )
         .await?;

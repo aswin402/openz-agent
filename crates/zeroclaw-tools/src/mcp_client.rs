@@ -33,7 +33,7 @@ const MAX_TOOL_TIMEOUT_SECS: u64 = 600;
 
 struct McpServerInner {
     config: McpServerConfig,
-    transport: Box<dyn McpTransportConn>,
+    transport: Option<Box<dyn McpTransportConn>>,
     #[cfg(target_has_atomic = "64")]
     next_id: AtomicU64,
     #[cfg(not(target_has_atomic = "64"))]
@@ -137,7 +137,7 @@ impl McpServer {
 
         let inner = McpServerInner {
             config,
-            transport,
+            transport: None, // Drop connection immediately to save RAM on startup
             #[cfg(target_has_atomic = "64")]
             next_id: AtomicU64::new(3), // Start at 3 since we used 1 and 2
             #[cfg(not(target_has_atomic = "64"))]
@@ -169,12 +169,71 @@ impl McpServer {
         self.inner.lock().await.config.name.clone()
     }
 
+    /// Ensure the connection to the MCP server is active, connecting lazily if necessary.
+    pub async fn ensure_connected(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        if inner.transport.is_some() {
+            return Ok(());
+        }
+
+        let silent = is_silent_mcp();
+        let mut transport = create_transport(&inner.config, silent).with_context(|| {
+            format!(
+                "failed to create transport for MCP server `{}`",
+                inner.config.name
+            )
+        })?;
+
+        // Initialize handshake
+        let id = 1u64;
+        let init_req = JsonRpcRequest::new(
+            id,
+            "initialize",
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "zeroclaw",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            }),
+        );
+
+        let init_resp = timeout(
+            Duration::from_secs(RECV_TIMEOUT_SECS),
+            transport.send_and_recv(&init_req),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "MCP server `{}` timed out after {}s waiting for initialize response",
+                inner.config.name, RECV_TIMEOUT_SECS
+            )
+        })??;
+
+        if init_resp.error.is_some() {
+            bail!(
+                "MCP server `{}` rejected initialize: {:?}",
+                inner.config.name,
+                init_resp.error
+            );
+        }
+
+        // Notify server that client is initialized (no response expected for notifications)
+        let notif = JsonRpcRequest::notification("notifications/initialized", json!({}));
+        let _ = transport.send_and_recv(&notif).await;
+
+        inner.transport = Some(transport);
+        Ok(())
+    }
+
     /// Call a tool on this server. Returns the raw JSON result.
     pub async fn call_tool(
         &self,
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value> {
+        self.ensure_connected().await?;
         let mut inner = self.inner.lock().await;
         let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
         let req = JsonRpcRequest::new(
@@ -191,9 +250,13 @@ impl McpServer {
             .unwrap_or(DEFAULT_TOOL_TIMEOUT_SECS)
             .min(MAX_TOOL_TIMEOUT_SECS);
 
+        let transport = inner
+            .transport
+            .as_mut()
+            .ok_or_else(|| anyhow::Error::msg("MCP transport is not connected"))?;
         let resp = timeout(
             Duration::from_secs(tool_timeout),
-            inner.transport.send_and_recv(&req),
+            transport.send_and_recv(&req),
         )
         .await
         .map_err(|_| {
@@ -241,6 +304,7 @@ pub fn is_silent_mcp() -> bool {
 }
 
 /// Registry of all connected MCP servers, with a flat tool index.
+#[derive(Clone)]
 pub struct McpRegistry {
     servers: Vec<McpServer>,
     /// prefixed_name → (server_index, original_tool_name)
@@ -250,6 +314,16 @@ pub struct McpRegistry {
 impl McpRegistry {
     /// Connect to all configured servers. Non-fatal: failures are logged and skipped.
     pub async fn connect_all(configs: &[McpServerConfig], silent: bool) -> Result<Self> {
+        static GLOBAL_REGISTRY: parking_lot::Mutex<Option<McpRegistry>> =
+            parking_lot::Mutex::new(None);
+
+        {
+            let cache = GLOBAL_REGISTRY.lock();
+            if let Some(ref registry) = *cache {
+                return Ok(registry.clone());
+            }
+        }
+
         let mut servers = Vec::new();
         let mut tool_index = HashMap::new();
 
@@ -315,15 +389,28 @@ impl McpRegistry {
             }
         }
 
-        Ok(Self {
+        let registry = Self {
             servers,
             tool_index,
-        })
+        };
+
+        {
+            let mut cache = GLOBAL_REGISTRY.lock();
+            *cache = Some(registry.clone());
+        }
+
+        Ok(registry)
     }
 
     /// All prefixed tool names across all connected servers.
     pub fn tool_names(&self) -> Vec<String> {
         self.tool_index.keys().cloned().collect()
+    }
+
+    /// Originating server name for a given prefixed tool name.
+    pub async fn get_server_name_for_tool(&self, prefixed_name: &str) -> Option<String> {
+        let (server_idx, _) = self.tool_index.get(prefixed_name)?;
+        Some(self.servers[*server_idx].name().await)
     }
 
     /// Tool definition for a given prefixed name (cloned).

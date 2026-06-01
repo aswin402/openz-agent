@@ -1479,6 +1479,13 @@ impl DelegateTool {
             String::new()
         };
 
+        // Resolve skills prompt mode: prefer per-agent config, fall back to global config.
+        let skills_prompt_mode = self
+            .root_config
+            .as_ref()
+            .map(|c| c.skills.prompt_injection_mode)
+            .unwrap_or(zeroclaw_config::schema::SkillsPromptInjectionMode::Compact);
+
         // Build structured operational context using SystemPromptBuilder sections.
         let ctx = PromptContext {
             workspace_dir,
@@ -1486,7 +1493,7 @@ impl DelegateTool {
             model_name,
             tools: prompt_tools,
             skills: &skills,
-            skills_prompt_mode: zeroclaw_config::schema::SkillsPromptInjectionMode::Full,
+            skills_prompt_mode,
             identity_config: None,
             dispatcher_instructions: "",
             sends_native_tool_specs: sends_native_tool_specs && !prompt_tools.is_empty(),
@@ -1522,13 +1529,27 @@ impl DelegateTool {
                 "USER.md",
                 "BOOTSTRAP.md",
             ];
+            const SUBAGENT_IDENTITY_CHAR_LIMIT: usize = 6_000;
+            let mut accumulated_chars = 0usize;
             for filename in identity_files {
                 let path = target_workspace.join(filename);
                 if let Ok(contents) = std::fs::read_to_string(&path) {
                     let trimmed = contents.trim();
-                    if !trimmed.is_empty() {
-                        enriched.push_str(trimmed);
+                    if !trimmed.is_empty() && accumulated_chars < SUBAGENT_IDENTITY_CHAR_LIMIT {
+                        let remaining =
+                            SUBAGENT_IDENTITY_CHAR_LIMIT.saturating_sub(accumulated_chars);
+                        let chunk = if trimmed.chars().count() > remaining {
+                            &trimmed[..trimmed
+                                .char_indices()
+                                .nth(remaining)
+                                .map(|(i, _)| i)
+                                .unwrap_or(trimmed.len())]
+                        } else {
+                            trimmed
+                        };
+                        enriched.push_str(chunk);
                         enriched.push_str("\n\n");
+                        accumulated_chars += chunk.chars().count();
                     }
                 }
             }

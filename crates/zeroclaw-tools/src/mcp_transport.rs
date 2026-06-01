@@ -143,10 +143,8 @@ impl StdioTransport {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                if !silent {
-                    if let Some(formatted) = format_mcp_log(&server_name, &line) {
-                        println!("{}", formatted);
-                    }
+                if !silent && let Some(formatted) = format_mcp_log(&server_name, &line) {
+                    println!("{}", formatted);
                 }
             }
         });
@@ -1064,7 +1062,10 @@ impl Drop for SseTransport {
 // ── Factory ──────────────────────────────────────────────────────────────
 
 /// Create a transport based on config.
-pub fn create_transport(config: &McpServerConfig, silent: bool) -> Result<Box<dyn McpTransportConn>> {
+pub fn create_transport(
+    config: &McpServerConfig,
+    silent: bool,
+) -> Result<Box<dyn McpTransportConn>> {
     match config.transport {
         McpTransport::Stdio => Ok(Box::new(StdioTransport::new(config, silent)?)),
         McpTransport::Http => Ok(Box::new(HttpTransport::new(config)?)),
