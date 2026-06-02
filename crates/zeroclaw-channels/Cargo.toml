@@ -20,7 +20,6 @@ anyhow = "1.0"
 lru = "0.16"
 rumqttc = "0.25"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws", "macros"] }
-async-imap = { version = "0.11", features = ["runtime-tokio"], default-features = false, optional = true }
 async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
@@ -28,11 +27,12 @@ directories = "6.0"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 hmac = "0.12"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
-lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"], optional = true }
-mail-parser = { version = "0.11.2", optional = true }
-matrix-sdk = { version = "0.17", optional = true, default-features = false, features = ["e2e-encryption", "markdown", "sqlite"] }
-mime_guess = { version = "2", optional = true }
-nostr-sdk = { version = "0.44", default-features = false, features = ["nip04", "nip59"], optional = true }
+# email deps removed 2026-06-02: channel-email feature trimmed
+# matrix-sdk, mime_guess removed: channel-matrix trimmed
+# nostr-sdk removed: channel-nostr trimmed
+# aes, ecb, md5 removed: channel-wechat trimmed
+# cpal removed: voice-wake trimmed
+# prost is only used by whatsapp-web (kept via that feature)
 parking_lot = "0.12"
 portable-atomic = "1"
 prost = { version = "0.14", default-features = false, features = ["derive"], optional = true }
@@ -72,7 +72,9 @@ wacore-binary = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734
 waproto = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734fb2ec544e22b7055147aa3e73b6889e3ff0d", optional = true, default-features = false }
 serde-big-array = { version = "0.5", optional = true }
 
-cpal = { version = "0.15", optional = true }
+# cpal removed 2026-06-02: voice-wake feature trimmed
+# aes, ecb, md5 removed 2026-06-02: channel-wechat feature trimmed
+# cpal was a voice-wake dep
 whatsapp-rust-ureq-http-client = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734fb2ec544e22b7055147aa3e73b6889e3ff0d", optional = true }
 whatsapp-rust-tokio-transport = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "9734fb2ec544e22b7055147aa3e73b6889e3ff0d", optional = true, default-features = false }
 qrcode = { version = "0.14", optional = true }
@@ -90,48 +92,23 @@ ecb = { version = "0.1", optional = true }
 md5 = { version = "0.8", optional = true }
 
 [features]
+# Trimmed 2026-06-02: kept only discord + telegram + whatsapp-web + acp-server
+# (the 25 other channels are no longer compiled in default — see AGENTS.md)
 default = [
     "channel-acp-server",
-    "channel-discord", "channel-slack", "channel-signal", "channel-mattermost",
-    "channel-irc", "channel-imessage", "channel-dingtalk", "channel-qq",
-    "channel-bluesky", "channel-twitter", "channel-reddit", "channel-notion",
-    "channel-linq", "channel-wati", "channel-nextcloud", "channel-mochat",
-    "channel-wecom", "channel-clawdtalk", "channel-webhook",
-    "channel-whatsapp-cloud", "channel-voice-call",
+    "channel-discord",
+    "channel-telegram",
+    "channel-whatsapp-cloud",
 ]
 # Channels with optional deps
-channel-email = ["dep:lettre", "dep:mail-parser", "dep:async-imap"]
 channel-telegram = ["dep:image"]
-channel-lark = ["dep:prost"]
-channel-line = []
-channel-nostr = ["dep:nostr-sdk", "zeroclaw-config/channel-nostr"]
 whatsapp-web = ["dep:whatsapp-rust", "dep:wacore", "dep:wacore-binary", "dep:waproto", "dep:serde-big-array", "dep:whatsapp-rust-ureq-http-client", "dep:whatsapp-rust-tokio-transport", "dep:qrcode", "dep:bytes", "dep:prost"]
 # Channels with no optional deps (cfg gate only)
 channel-discord = []
-channel-slack = []
-channel-signal = []
-channel-mattermost = []
-channel-irc = []
-channel-imessage = []
-channel-dingtalk = []
-channel-qq = []
-channel-bluesky = []
-channel-twitter = []
-channel-reddit = []
-channel-notion = []
-channel-linq = []
-channel-wati = []
-channel-nextcloud = []
-channel-mochat = []
-channel-wechat = ["dep:aes", "dep:ecb", "dep:md5", "dep:mime_guess", "dep:qrcode"]
-channel-wecom = []
-channel-clawdtalk = []
-channel-webhook = []
 channel-whatsapp-cloud = []
-channel-voice-call = []
 channel-acp-server = []
-channel-matrix = ["dep:matrix-sdk", "dep:mime_guess"]
-voice-wake = ["dep:cpal", "zeroclaw-config/voice-wake"]
+# Backward-compat alias kept (some tooling still references whatsapp-cloud)
+channel-line = []
 
 [dev-dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
