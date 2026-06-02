@@ -60,10 +60,7 @@ use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
 use zeroclaw_api::channel::{Channel, SendMessage};
 use zeroclaw_api::tool::ToolSpec;
-use zeroclaw_channels::{
-    gmail_push::GmailPushChannel, linq::LinqChannel, nextcloud_talk::NextcloudTalkChannel,
-    wati::WatiChannel, whatsapp::WhatsAppChannel,
-};
+use zeroclaw_channels::whatsapp::WhatsAppChannel;
 use zeroclaw_config::policy::SecurityPolicy;
 use zeroclaw_config::schema::Config;
 use zeroclaw_infra::session_backend::SessionBackend;
@@ -119,14 +116,20 @@ fn whatsapp_memory_key(msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     format!("whatsapp_{}_{}", msg.sender, msg.id)
 }
 
+// Channel-specific helper functions for removed channels (2026-06-02 trim).
+// Kept here as cfg(any()) so the symbols exist for any stale code references
+// and for reference if a channel is re-added later. Re-enable by replacing
+// `#[cfg(any())]` with `#[cfg(feature = "channel-...")]` and adding the
+// feature back to zeroclaw-channels/Cargo.toml + the workspace Cargo.toml.
+#[cfg(any())]
 fn linq_memory_key(msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     format!("linq_{}_{}", msg.sender, msg.id)
 }
-
+#[cfg(any())]
 fn wati_memory_key(msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     format!("wati_{}_{}", msg.sender, msg.id)
 }
-
+#[cfg(any())]
 fn nextcloud_talk_memory_key(msg: &zeroclaw_api::channel::ChannelMessage) -> String {
     format!("nextcloud_talk_{}_{}", msg.sender, msg.id)
 }
@@ -381,14 +384,17 @@ pub struct AppState {
     pub whatsapp: Option<Arc<WhatsAppChannel>>,
     /// `WhatsApp` app secret for webhook signature verification (`X-Hub-Signature-256`)
     pub whatsapp_app_secret: Option<Arc<str>>,
+    #[cfg(any())] // channel-linq removed 2026-06-02
     pub linq: Option<Arc<LinqChannel>>,
-    /// Linq webhook signing secret for signature verification
+    #[cfg(any())] // channel-linq removed 2026-06-02
     pub linq_signing_secret: Option<Arc<str>>,
+    #[cfg(any())] // channel-nextcloud removed 2026-06-02
     pub nextcloud_talk: Option<Arc<NextcloudTalkChannel>>,
-    /// Nextcloud Talk webhook secret for signature verification
+    #[cfg(any())] // channel-nextcloud removed 2026-06-02
     pub nextcloud_talk_webhook_secret: Option<Arc<str>>,
+    #[cfg(any())] // channel-wati removed 2026-06-02
     pub wati: Option<Arc<WatiChannel>>,
-    /// Gmail Pub/Sub push notification channel
+    #[cfg(any())] // channel-email (gmail_push) removed 2026-06-02
     pub gmail_push: Option<Arc<GmailPushChannel>>,
     /// Observability backend for metrics scraping
     pub observer: Arc<dyn zeroclaw_runtime::observability::Observer>,
@@ -808,117 +814,9 @@ pub async fn run_gateway(
         })
         .map(Arc::from);
 
-    // Linq channel (if configured)
-    let linq_channel: Option<Arc<LinqChannel>> = config.channels.linq.values().next().map(|lq| {
-        let alias = "default".to_string();
-        let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> = {
-            let cfg_arc = config_state.clone();
-            let alias = alias.clone();
-            Arc::new(move || cfg_arc.read().channel_external_peers("linq", &alias))
-        };
-        Arc::new(LinqChannel::new(
-            lq.api_token.clone(),
-            lq.from_phone.clone(),
-            alias,
-            peer_resolver,
-        ))
-    });
-
-    // Linq signing secret for webhook signature verification.
-    let linq_signing_secret: Option<Arc<str>> = config
-        .channels
-        .linq
-        .values()
-        .next()
-        .and_then(|lq| {
-            lq.signing_secret
-                .as_deref()
-                .map(str::trim)
-                .filter(|secret| !secret.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .map(Arc::from);
-
-    // WATI channel (if configured)
-    let wati_channel: Option<Arc<WatiChannel>> =
-        config.channels.wati.values().next().map(|wati_cfg| {
-            let alias = "default".to_string();
-            let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> = {
-                let cfg_arc = config_state.clone();
-                let alias = alias.clone();
-                Arc::new(move || cfg_arc.read().channel_external_peers("wati", &alias))
-            };
-            Arc::new(
-                WatiChannel::new(
-                    wati_cfg.api_token.clone(),
-                    wati_cfg.api_url.clone(),
-                    wati_cfg.tenant_id.clone(),
-                    alias,
-                    peer_resolver,
-                )
-                .with_transcription(config.transcription.clone()),
-            )
-        });
-
-    // Nextcloud Talk channel (if configured)
-    let nextcloud_talk_channel: Option<Arc<NextcloudTalkChannel>> =
-        config.channels.nextcloud_talk.values().next().map(|nc| {
-            let alias = "default".to_string();
-            let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> = {
-                let cfg_arc = config_state.clone();
-                let alias = alias.clone();
-                Arc::new(move || {
-                    cfg_arc
-                        .read()
-                        .channel_external_peers("nextcloud_talk", &alias)
-                })
-            };
-            Arc::new(NextcloudTalkChannel::new(
-                nc.base_url.clone(),
-                nc.app_token.clone(),
-                nc.bot_name.clone().unwrap_or_default(),
-                alias,
-                peer_resolver,
-            ))
-        });
-
-    // Nextcloud Talk webhook secret for signature verification.
-    let nextcloud_talk_webhook_secret: Option<Arc<str>> = config
-        .channels
-        .nextcloud_talk
-        .get("default")
-        .and_then(|nc| {
-            nc.webhook_secret
-                .as_deref()
-                .map(str::trim)
-                .filter(|secret| !secret.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .map(Arc::from);
-
-    // Gmail Push channel (if configured and referenced by an enabled agent)
-    let gmail_push_channel: Option<Arc<GmailPushChannel>> = {
-        let active: std::collections::HashSet<String> = config
-            .agents
-            .values()
-            .filter(|a| a.enabled)
-            .flat_map(|a| a.channels.iter().map(|c| c.as_str().to_string()))
-            .collect();
-        config
-            .channels
-            .gmail_push
-            .iter()
-            .find(|(alias, _)| active.contains(&format!("gmail_push.{alias}")))
-            .map(|(alias, gp)| {
-                let alias = alias.clone();
-                let peer_resolver: Arc<dyn Fn() -> Vec<String> + Send + Sync> = {
-                    let cfg_arc = config_state.clone();
-                    let alias = alias.clone();
-                    Arc::new(move || cfg_arc.read().channel_external_peers("gmail_push", &alias))
-                };
-                Arc::new(GmailPushChannel::new(gp.clone(), alias, peer_resolver))
-            })
-    };
+    // Channels (linq/wati/nextcloud/gmail) removed 2026-06-02 — init code commented out
+    // (their AppState fields are #[cfg(any())]'d, so these would not link).
+    // Original code preserved in git history for re-enable if needed.
 
     // ── Session persistence for WS chat ─────────────────────
     // Routes through `make_session_backend` so `[channels].session_backend`
