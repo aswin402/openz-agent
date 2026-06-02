@@ -95,3 +95,6 @@ web/src/lib/api-generated.ts
 # Generated OpenAPI spec (transient handoff for openapi-typescript)
 target/openapi.json
 /v[0-9]*.toml
+
+# Runtime logs (audit, mcp) — local-only, regenerated on every run
+/logs/

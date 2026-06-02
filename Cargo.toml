@@ -30,6 +30,7 @@ aardvark-sys = { path = "crates/aardvark-sys", version = "0.1.0" }
 screenshots = "0.8.10"
 rdev = "0.5.3"
 enigo = "0.3.0"
+arboard = "3.4.0"
 chromiumoxide = { git = "https://github.com/mattsse/chromiumoxide" }
 sysinfo = "0.33.0"
 walkdir = "2.5.0"

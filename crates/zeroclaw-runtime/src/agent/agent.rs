@@ -1343,7 +1343,66 @@ impl Agent {
         self.model_name.clone()
     }
 
+    async fn preprocess_user_message_vision(&self, user_message: &str) -> String {
+        if !user_message.contains("[IMAGE:") || self.model_provider.supports_vision() {
+            return user_message.to_string();
+        }
+
+        let mut auto_vp = None;
+        if std::env::var("GEMINI_API_KEY").is_ok() {
+            auto_vp = Some(("google".to_string(), "gemini-1.5-flash".to_string()));
+        } else if std::env::var("OPENAI_API_KEY").is_ok() {
+            auto_vp = Some(("openai".to_string(), "gpt-4o-mini".to_string()));
+        } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+            auto_vp = Some(("anthropic".to_string(), "claude-3-5-sonnet-latest".to_string()));
+        }
+
+        if let Some((vp_name, vm_name)) = auto_vp {
+            if let Ok(vp_instance) = zeroclaw_providers::create_model_provider(&vp_name, None) {
+                if vp_instance.supports_vision() {
+                    let instructions = "Analyze the visual contents of the target image(s) provided below. Describe what you see in extreme detail.";
+                    let vision_prompt = format!(
+                        "{}\n\nTarget image(s) containing visual data:\n{}",
+                        instructions, user_message
+                    );
+
+                    let dummy_messages = vec![ChatMessage::user(vision_prompt)];
+                    if let Ok(prepared) = zeroclaw_providers::multimodal::prepare_messages_for_provider(
+                        &dummy_messages,
+                        &self.multimodal_config,
+                    ).await {
+                        if let Ok(resp) = vp_instance.chat(
+                            ChatRequest {
+                                messages: &prepared.messages,
+                                tools: None,
+                            },
+                            &vm_name,
+                            Some(0.0),
+                        ).await {
+                            if let Some(desc) = resp.text {
+                                let mut temp_text = user_message.to_string();
+                                while let Some(start_idx) = temp_text.find("[IMAGE:") {
+                                    if let Some(end_idx) = temp_text[start_idx..].find(']') {
+                                        let full_marker = &temp_text[start_idx..start_idx + end_idx + 1];
+                                        temp_text = temp_text.replace(full_marker, &format!("\n### [Image Description (vision-agent)]\n{}\n", desc));
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                return temp_text;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        user_message.to_string()
+    }
+
     pub async fn turn(&mut self, user_message: &str) -> Result<String> {
+        let user_message_processed = self.preprocess_user_message_vision(user_message).await;
+
         if self.history.is_empty() {
             let system_prompt = self.build_system_prompt()?;
             self.history
@@ -1356,7 +1415,7 @@ impl Agent {
             .memory_loader
             .load_context(
                 self.memory.as_ref(),
-                user_message,
+                &user_message_processed,
                 self.memory_session_id.as_deref(),
             )
             .await
@@ -1367,7 +1426,7 @@ impl Agent {
                 .memory
                 .store(
                     "user_msg",
-                    user_message,
+                    &user_message_processed,
                     MemoryCategory::Conversation,
                     self.memory_session_id.as_deref(),
                 )
@@ -1382,15 +1441,15 @@ impl Agent {
             format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} {tz}");
 
         let enriched = if context.is_empty() {
-            format!("[CURRENT DATE & TIME: {date_str}]\n\n{user_message}")
+            format!("[CURRENT DATE & TIME: {date_str}]\n\n{user_message_processed}")
         } else {
-            format!("[CURRENT DATE & TIME: {date_str}]\n\n{context}\n\n{user_message}")
+            format!("[CURRENT DATE & TIME: {date_str}]\n\n{context}\n\n{user_message_processed}")
         };
 
         self.history
             .push(ConversationMessage::Chat(ChatMessage::user(enriched)));
 
-        let effective_model = self.classify_model(user_message);
+        let effective_model = self.classify_model(&user_message_processed);
 
         for _ in 0..self.config.max_tool_iterations {
             let messages = self.tool_dispatcher.to_provider_messages(&self.history);
@@ -1524,6 +1583,8 @@ impl Agent {
         event_tx: tokio::sync::mpsc::Sender<TurnEvent>,
         cancel_token: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<(String, Vec<ConversationMessage>)> {
+        let user_message_processed = self.preprocess_user_message_vision(user_message).await;
+
         // ── Preamble (identical to turn) ───────────────────────────────
         if self.history.is_empty() {
             let system_prompt = self.build_system_prompt()?;
@@ -1537,7 +1598,7 @@ impl Agent {
             .memory_loader
             .load_context(
                 self.memory.as_ref(),
-                user_message,
+                &user_message_processed,
                 self.memory_session_id.as_deref(),
             )
             .await
@@ -1548,7 +1609,7 @@ impl Agent {
                 .memory
                 .store(
                     "user_msg",
-                    user_message,
+                    &user_message_processed,
                     MemoryCategory::Conversation,
                     self.memory_session_id.as_deref(),
                 )
@@ -1557,9 +1618,9 @@ impl Agent {
 
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z");
         let enriched = if context.is_empty() {
-            format!("[{now}] {user_message}")
+            format!("[{now}] {user_message_processed}")
         } else {
-            format!("{context}[{now}] {user_message}")
+            format!("{context}[{now}] {user_message_processed}")
         };
 
         let mut new_msgs: Vec<ConversationMessage> = Vec::new();
@@ -1567,7 +1628,7 @@ impl Agent {
         new_msgs.push(user_msg.clone());
         self.history.push(user_msg);
 
-        let effective_model = self.classify_model(user_message);
+        let effective_model = self.classify_model(&user_message_processed);
         let turn_started_at = std::time::Instant::now();
 
         // ── Turn loop ──────────────────────────────────────────────────

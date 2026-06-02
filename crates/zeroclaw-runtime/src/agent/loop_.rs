@@ -1732,10 +1732,14 @@ pub async fn run_tool_call_loop(
 
         let image_marker_count = multimodal::count_image_markers(history);
 
+        let mut resolved_vp_name = multimodal_config.vision_model_provider.clone();
+        let mut resolved_vm = multimodal_config.vision_model.clone();
+
         // ── Vision model_provider routing ──────────────────────────
         // When the default model_provider lacks vision support but a dedicated
         // vision_model_provider is configured, create it on demand and use it
-        // for this iteration.  Otherwise, preserve the original error.
+        // for this iteration. Otherwise, attempt to auto-detect a vision provider
+        // from the environment API keys (Gemini, OpenAI, Anthropic).
         let vision_model_provider_box: Option<Box<dyn ModelProvider>> = if image_marker_count > 0
             && !model_provider.supports_vision()
         {
@@ -1771,29 +1775,56 @@ pub async fn run_tool_call_loop(
                 }
                 Some(vp_instance)
             } else {
-                return Err(ProviderCapabilityError {
-                        model_provider: provider_name.to_string(),
-                        capability: "vision".to_string(),
-                        message: format!(
-                            "received {image_marker_count} image marker(s), but this model_provider does not support vision input"
-                        ),
+                // Auto-detect a vision provider from the environment
+                let mut auto_vp = None;
+                if std::env::var("GEMINI_API_KEY").is_ok() {
+                    auto_vp = Some(("google".to_string(), "gemini-1.5-flash".to_string()));
+                } else if std::env::var("OPENAI_API_KEY").is_ok() {
+                    auto_vp = Some(("openai".to_string(), "gpt-4o-mini".to_string()));
+                } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+                    auto_vp = Some(("anthropic".to_string(), "claude-3-5-sonnet-latest".to_string()));
+                }
+
+                if let Some((vp, vm)) = auto_vp {
+                    let vp_instance = zeroclaw_providers::create_model_provider(&vp, None).map_err(|e| {
+                        anyhow::Error::msg(format!("failed to auto-detect vision model_provider '{vp}': {e}"))
+                    })?;
+                    if vp_instance.supports_vision() {
+                        resolved_vp_name = Some(vp.clone());
+                        resolved_vm = Some(vm);
+                        Some(vp_instance)
+                    } else {
+                        None
                     }
-                    .into());
+                } else {
+                    None
+                }
             }
         } else {
             None
         };
+
+        // If no vision provider was found (either configured or auto-detected), throw the error
+        if image_marker_count > 0 && !model_provider.supports_vision() && vision_model_provider_box.is_none() {
+            return Err(ProviderCapabilityError {
+                model_provider: provider_name.to_string(),
+                capability: "vision".to_string(),
+                message: format!(
+                    "received {image_marker_count} image marker(s), but this model_provider does not support vision input and no vision fallback could be auto-detected"
+                ),
+            }
+            .into());
+        }
 
         let (active_model_provider, active_model_provider_name, active_model): (
             &dyn ModelProvider,
             &str,
             &str,
         ) = if let Some(ref vp_box) = vision_model_provider_box {
-            let vp_name = multimodal_config
-                .vision_model_provider
+            let vp_name = resolved_vp_name
                 .as_deref()
                 .unwrap_or(provider_name);
-            let vm = multimodal_config.vision_model.as_deref().unwrap_or(model);
+            let vm = resolved_vm.as_deref().unwrap_or(model);
             (vp_box.as_ref(), vp_name, vm)
         } else {
             (model_provider, provider_name, model)
@@ -4799,6 +4830,48 @@ pub async fn run(
                                                         );
                                                         cursor_pos = i;
                                                         input_buf = new_chars.into_iter().collect();
+                                                    }
+                                                    selected_cmd_idx = 0;
+                                                }
+                                                // Handle Ctrl+V / Ctrl+Shift+V for clipboard pasting
+                                                crossterm::event::KeyCode::Char('v') | crossterm::event::KeyCode::Char('V')
+                                                    if key_event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                                                {
+                                                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                                        // 1. Try to read image first
+                                                        if let Ok(image) = clipboard.get_image() {
+                                                            let temp_dir = std::env::temp_dir().join("zeroclaw_clipboard");
+                                                            std::fs::create_dir_all(&temp_dir).ok();
+                                                            let filename = format!("clip_{}.png", uuid::Uuid::new_v4());
+                                                            let file_path = temp_dir.join(filename);
+                                                            
+                                                            let width = image.width as u32;
+                                                            let height = image.height as u32;
+                                                            let raw_bytes = image.bytes.into_owned();
+                                                            if let Some(buf) = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
+                                                                width,
+                                                                height,
+                                                                raw_bytes,
+                                                            ) {
+                                                                if buf.save(&file_path).is_ok() {
+                                                                    let marker = format!("[IMAGE:{}]", file_path.display());
+                                                                    let mut chars: Vec<char> = input_buf.chars().collect();
+                                                                    for c in marker.chars() {
+                                                                        chars.insert(cursor_pos, c);
+                                                                        cursor_pos += 1;
+                                                                    }
+                                                                    input_buf = chars.into_iter().collect();
+                                                                }
+                                                            }
+                                                        } else if let Ok(text) = clipboard.get_text() {
+                                                            // 2. Fallback to pasting text from clipboard
+                                                            let mut chars: Vec<char> = input_buf.chars().collect();
+                                                            for c in text.chars() {
+                                                                chars.insert(cursor_pos, c);
+                                                                cursor_pos += 1;
+                                                            }
+                                                            input_buf = chars.into_iter().collect();
+                                                        }
                                                     }
                                                     selected_cmd_idx = 0;
                                                 }
