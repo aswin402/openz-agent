@@ -267,8 +267,8 @@ impl TuiApp {
                                                 if let Some(ref path) = session_state_file {
                                                     let _ = crate::agent::loop_::save_interactive_session_history(path, &self.session.history);
                                                 }
-                                            } else if trimmed.starts_with("/model ") {
-                                                let target = trimmed["/model ".len()..].trim();
+                                            } else if trimmed.starts_with("/models ") {
+                                                let target = trimmed["/models ".len()..].trim();
                                                 if let Some((p, m)) = target.split_once('/') {
                                                     let new_provider_name = p.trim().to_string();
                                                     let new_model_name = m.trim().to_string();
@@ -305,8 +305,10 @@ impl TuiApp {
                                                         }
                                                     }
                                                 } else {
-                                                    self.session.status = "Use: /model <provider>/<model>".to_string();
+                                                    self.session.status = "Use: /models <provider>/<model>".to_string();
                                                 }
+                                            } else if trimmed == "/models" || trimmed == "/model" {
+                                                self.session.status = "Use: /models <provider>/<model>".to_string();
                                             } else {
                                                 // Start LLM/Agent Loop Turn
                                                 self.session.is_thinking = true;
@@ -360,6 +362,7 @@ impl TuiApp {
                                                         &chan_name_clone,
                                                         None,
                                                         &multi_clone,
+                                                        None, // vision_provider
                                                         max_tool_iterations,
                                                         None, // cancel token
                                                         Some(delta_tx),

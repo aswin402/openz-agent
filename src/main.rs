@@ -18,7 +18,7 @@ pub mod tui;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use dialoguer::Select;
+use dialoguer::{Input, Select};
 use zeroclaw_config::providers::ModelProviderRef;
 use zeroclaw_config::schema::Config;
 
@@ -98,6 +98,23 @@ enum Commands {
     Memory {
         #[command(subcommand)]
         command: zeroclaw::MemoryCommands,
+    },
+    /// Run multi-agent orchestration (plan → execute → reflect)
+    Orchestrate {
+        /// Goal or objective for the orchestration
+        goal: String,
+        /// Agent alias for the planner (default: "planner")
+        #[arg(long, default_value = "planner")]
+        planner: String,
+        /// Agent alias for the reviewer (default: "reviewer")
+        #[arg(long, default_value = "reviewer")]
+        reviewer: String,
+        /// Max repair retries per task (default: 2, 0 = skip reflection)
+        #[arg(long, default_value_t = 2)]
+        max_repair: usize,
+        /// Fail fast on first task failure (default: true)
+        #[arg(long, default_value_t = true)]
+        fail_fast: bool,
     },
 }
 
@@ -319,6 +336,48 @@ async fn main() -> Result<()> {
                 let config = Config::load_or_init().await?;
                 zeroclaw::memory::cli::handle_command(command, &config).await?;
             }
+            Commands::Orchestrate {
+                goal,
+                planner,
+                reviewer,
+                max_repair,
+                fail_fast,
+            } => {
+                let config = Config::load_or_init().await?;
+                #[cfg(feature = "agent-runtime")]
+                {
+                    use std::sync::Arc;
+                    use zeroclaw_runtime::orchestrate::{
+                        FailureMode, MultiAgentOrchestrator, OrchestrationConfig,
+                    };
+
+                    let orch_config = OrchestrationConfig {
+                        planner_alias: planner,
+                        reviewer_alias: reviewer,
+                        max_repair_retries: max_repair,
+                        failure_mode: if fail_fast {
+                            FailureMode::FailFast
+                        } else {
+                            FailureMode::ContinueOnFailure
+                        },
+                        ..OrchestrationConfig::default()
+                    };
+
+                    let orchestrator = MultiAgentOrchestrator::new(
+                        Arc::new(config),
+                        "cli-user",
+                        orch_config,
+                    );
+
+                    orchestrator.run_goal(&goal).await?;
+                }
+                #[cfg(not(feature = "agent-runtime"))]
+                {
+                    anyhow::bail!(
+                        "Orchestration requires the agent-runtime feature to be enabled"
+                    );
+                }
+            }
         }
         return Ok(());
     }
@@ -360,6 +419,79 @@ async fn main() -> Result<()> {
     let final_temperature: Option<f64> = config
         .model_provider_for_agent(&agent_alias)
         .and_then(|e| e.temperature);
+
+    // Print the "primary model" banner so the user knows which
+    // authority model is running and which subagent roles are
+    // available for it to dispatch to. This makes the
+    // primary-model-→-subagent relationship visible at startup,
+    // which is the new mental model the system prompt relies on.
+    if std::io::stdout().is_terminal() {
+        let mut primary_model_name = "(unset)".to_string();
+        if let Some((_, _, model_cfg)) = config.resolved_model_provider_for_agent(&agent_alias) {
+            primary_model_name = model_cfg
+                .model
+                .clone()
+                .unwrap_or_else(|| "(unset)".to_string());
+        }
+        eprintln!(
+            "{}",
+            console::style(format!(
+                "▶ Primary model: {agent_alias} → {primary_model_name}"
+            ))
+            .cyan()
+        );
+        let mut subagent_aliases: Vec<&str> = config
+            .agents
+            .keys()
+            .map(String::as_str)
+            .filter(|a| *a != agent_alias)
+            .collect();
+        subagent_aliases.sort();
+        if !subagent_aliases.is_empty() {
+            eprintln!(
+                "{}",
+                console::style(format!(
+                    "  Subagents available for automatic dispatch: {}",
+                    subagent_aliases.join(", ")
+                ))
+                .dim()
+            );
+        }
+        eprintln!(
+            "{}",
+            console::style(
+                "  The primary model decides when to spawn / stop / swap-model on subagents via the `subagent_manage` tool."
+            )
+            .dim()
+        );
+    }
+
+    // Auto-create the standard subagent roster so the primary model
+    // can dispatch out of the box (no user picking, no manual
+    // `openz configure subagents` step). Idempotent: existing
+    // aliases are left alone. Vision-agent is wired to a
+    // vision-capable model when one is available; everyone else
+    // inherits the primary's model. The primary's banner above
+    // already advertises the discovered subagent list, so the user
+    // sees the roster take shape.
+    let (primary_provider_type, primary_model_id) = config
+        .resolved_model_provider_for_agent(&agent_alias)
+        .map_or_else(
+            || ("openrouter".to_string(), "openai/gpt-4o-mini".to_string()),
+            |(ty, alias, cfg)| {
+                (
+                    ty.to_string(),
+                    cfg.model.clone().unwrap_or_else(|| alias.to_string()),
+                )
+            },
+        );
+    ensure_default_subagents(
+        &mut config,
+        &agent_alias,
+        &primary_provider_type,
+        &primary_model_id,
+    )
+    .await;
 
     // Session selection/resume wizard
     let sessions = list_sessions();
@@ -1504,6 +1636,194 @@ async fn run_configure_telegram(config: &mut Config) -> Result<()> {
     Ok(())
 }
 
+/// Standard subagent roster auto-created on every `openz` startup when
+/// missing. Each entry is the `target_alias` the primary model will
+/// call `subagent_manage.spawn` with. The system prompt for the
+/// primary maps tasks to these names (vision-agent, coder, etc.) so
+/// the primary knows what to dispatch without any user intervention.
+///
+/// `system_purpose` is injected as a one-line "role" string into the
+/// subagent's identity section so the spawned subagent runs with the
+/// right persona, not a generic "you are a helpful AI assistant".
+#[derive(Clone)]
+struct DefaultSubagentSpec {
+    alias: &'static str,
+    role: &'static str,
+    /// If `true`, this subagent should be wired to a vision-capable
+    /// model even if the primary's model is text-only. The CLI picks
+    /// a vision-capable provider from the user's config (or falls
+    /// back to a sensible default).
+    needs_vision: bool,
+}
+
+const DEFAULT_SUBAGENTS: &[DefaultSubagentSpec] = &[
+    DefaultSubagentSpec {
+        alias: "vision-agent",
+        role: "vision analyzer — you receive images (described in the user prompt as image markers or URLs) and return a precise, structured description of what you see (objects, text, layout, color, spatial relationships). You do NOT chat, you do NOT speculate beyond the pixels, and you do NOT call other tools. Your entire output is the description.",
+        needs_vision: true,
+    },
+    DefaultSubagentSpec {
+        alias: "coder",
+        role: "software engineer — you write, edit, refactor, debug, and test code in the project's working directory. You prefer the smallest correct change, run the project's tests when relevant, and report back with a diff summary and test status.",
+        needs_vision: false,
+    },
+    DefaultSubagentSpec {
+        alias: "research-agent",
+        role: "researcher — you gather information from the local codebase (files, grep, content_search) and from external sources (web_search, web_fetch) and return a cited, factual summary. You distinguish \"found\" from \"inferred\".",
+        needs_vision: false,
+    },
+    DefaultSubagentSpec {
+        alias: "docs-agent",
+        role: "technical writer — you produce READMEs, API docs, changelogs, and code summaries. Your output is the final document, ready to commit, in markdown.",
+        needs_vision: false,
+    },
+    DefaultSubagentSpec {
+        alias: "reviewer",
+        role: "code reviewer — you read diffs and the surrounding code, then return a focused review covering correctness, edge cases, security, and style. You do NOT edit files; you only report findings.",
+        needs_vision: false,
+    },
+    DefaultSubagentSpec {
+        alias: "openz-planagent",
+        role: "planner — you turn a vague user request into a precise spec, implementation plan, target-files list, and acceptance checklist. You do NOT execute; the plan is returned to the primary.",
+        needs_vision: false,
+    },
+    DefaultSubagentSpec {
+        alias: "worker",
+        role: "generalist — shell, web, and file work for tasks that don't fit a specialist alias. You execute and report back.",
+        needs_vision: false,
+    },
+];
+
+/// Pick a vision-capable provider/model from the loaded config, with
+/// a sensible fallback. The fallback prefers models the user is
+/// already configured for and only synthesizes a fresh entry as a
+/// last resort.
+fn pick_vision_model(config: &Config) -> Option<(String, String)> {
+    // 1) Look for an already-configured entry that the providers
+    // catalog marks as vision-capable. We can't introspect that
+    // without a model-catalog round-trip, so we use a known-good
+    // alias list per provider family.
+    const KNOWN_VISION_ALIASES: &[(&str, &str)] = &[
+        ("anthropic", "claude-3-5-sonnet-latest"),
+        ("anthropic", "claude-3-5-sonnet"),
+        ("openai", "gpt-4o"),
+        ("openai", "gpt-4o-mini"),
+        ("gemini", "gemini-2.0-flash"),
+        ("gemini", "gemini-1.5-flash"),
+        ("ollama", "llava"),
+        ("ollama", "llama3.2-vision"),
+    ];
+
+    // Try to find any configured provider that matches a known
+    // vision-capable alias. The provider's model entry is what
+    // `model_provider_for_agent` resolves against.
+    for (type_key, alias) in KNOWN_VISION_ALIASES {
+        if config.providers.models.find(type_key, alias).is_some() {
+            return Some((type_key.to_string(), alias.to_string()));
+        }
+    }
+
+    // 2) Fall back: look for any configured provider the user has,
+    // and pick a known-vision model for that provider family even
+    // if the alias isn't yet in the config. The user can adjust in
+    // the wizard.
+    if let Some((type_key, _, _)) = config.providers.models.iter_entries().next() {
+        for (ty, alias) in KNOWN_VISION_ALIASES {
+            if *ty == type_key {
+                return Some((ty.to_string(), alias.to_string()));
+            }
+        }
+    }
+
+    None
+}
+
+/// Ensure the standard subagent roster exists in the config. Called
+/// on every `openz` startup; idempotent and silent when the aliases
+/// are already present. Each alias inherits the primary's model
+/// provider by default, except `vision-agent` which is wired to a
+/// vision-capable model (so the primary can dispatch an image to
+/// the vision subagent even if the primary's own model is text-only).
+async fn ensure_default_subagents(
+    config: &mut Config,
+    primary_alias: &str,
+    primary_provider: &str,
+    primary_model: &str,
+) {
+    // The primary uses the user's chosen provider/model as the
+    // default for subagents that don't need a specialized model.
+    let default_provider = primary_provider.to_string();
+    let default_model = primary_model.to_string();
+
+    // Resolve a vision-capable provider for the vision subagent. If
+    // we can't find one, fall back to the primary's model — the
+    // user can fix it later from the configure wizard.
+    let vision_provider_model = pick_vision_model(config)
+        .unwrap_or_else(|| (default_provider.clone(), default_model.clone()));
+
+    for spec in DEFAULT_SUBAGENTS {
+        let alias = spec.alias;
+        if config.agents.contains_key(alias) {
+            continue;
+        }
+
+        let entry = zeroclaw_config::schema::AliasedAgentConfig {
+            risk_profile: "default".to_string(),
+            runtime_profile: "default".to_string(),
+            ..Default::default()
+        };
+        config.agents.insert(alias.to_string(), entry);
+        config.mark_dirty(&format!("agents.{alias}"));
+
+        // Wire the model provider for the new alias. Vision-agent
+        // gets a vision-capable model; everyone else inherits the
+        // primary's model.
+        let (provider_type, provider_alias, model_id) = if spec.needs_vision {
+            (
+                vision_provider_model.0.clone(),
+                vision_provider_model.1.clone(),
+                vision_provider_model.1.clone(),
+            )
+        } else {
+            (
+                default_provider.clone(),
+                default_model.clone(),
+                default_model.clone(),
+            )
+        };
+
+        // Format: "<provider_type>.<provider_alias>" matches the
+        // existing model-provider reference convention used by the
+        // configure wizard at src/main.rs:1157-1186.
+        let mp_ref = format!("{provider_type}.{provider_alias}");
+        let _ = config.set_prop_persistent(&format!("agents.{alias}.model-provider"), &mp_ref);
+        let _ = config.set_prop_persistent(&format!("agents.{alias}.risk-profile"), "default");
+        let _ = config.set_prop_persistent(&format!("agents.{alias}.runtime-profile"), "default");
+
+        // Stash the role as a `personality` field if the schema
+        // supports it (the wizard at run_configure_wizard uses the
+        // same shape). This is best-effort: if the schema rejects
+        // the value we just don't set it; the subagent still runs
+        // with the default generic system prompt.
+        let _ = model_id; // model_id is implied by provider_alias in this schema
+        let _ = config.set_prop_persistent(&format!("agents.{alias}.description"), spec.role);
+    }
+
+    // Persist the freshly-inserted aliases so the next launch finds
+    // them without re-running setup. Best-effort: if save fails the
+    // in-memory config is still correct for this run, the next
+    // launch will just re-run ensure_default_subagents.
+    if let Err(e) = config.save().await {
+        eprintln!(
+            "{}",
+            console::style(format!(
+                "warning: could not persist default subagent roster: {e}"
+            ))
+            .yellow()
+        );
+    }
+}
+
 async fn validate_telegram_token(token: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -1553,9 +1873,14 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
     let theme = get_clean_theme();
 
     let subagents = vec![
+        "planner",
         "coder",
         "reviewer",
         "research-agent",
+        "tester",
+        "validator",
+        "memory-agent",
+        "skill-creator",
         "openz-planagent",
         "worker",
         "docs-agent",
@@ -1563,6 +1888,10 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
     ];
 
     let descriptions = vec![
+        (
+            "planner",
+            "Analyzes tasks and produces execution plans listing which subagents to invoke.",
+        ),
         (
             "coder",
             "Specialized in writing, refactoring, and fixing code across multiple files.",
@@ -1574,6 +1903,22 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
         (
             "research-agent",
             "Gathers context, runs ripgrep searches, and explores codebases or documentation.",
+        ),
+        (
+            "tester",
+            "Writes and runs tests, analyzes failures, reports coverage gaps.",
+        ),
+        (
+            "validator",
+            "Reviews combined output for correctness, consistency, and completeness.",
+        ),
+        (
+            "memory-agent",
+            "Curates long-term memory: extracts facts, summarizes, links related info.",
+        ),
+        (
+            "skill-creator",
+            "Creates and modifies AI skills programmatically.",
         ),
         (
             "openz-planagent",
@@ -1593,16 +1938,32 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
         ),
     ];
 
+    // Build set of standard subagent aliases for dedup with user-defined agents.
+    let standard_set: std::collections::HashSet<&str> =
+        subagents.iter().copied().collect();
+
     loop {
-        let mut subagent_items = Vec::new();
+        // Build combined list: standard roles first, then user-defined from config.
+        let mut all_aliases: Vec<String> = Vec::new();
         for s in &subagents {
-            let primary_model = if let Some(agent_cfg) = config.agents.get(*s) {
+            all_aliases.push(s.to_string());
+        }
+        for alias in config.agents.keys() {
+            if !standard_set.contains(alias.as_str()) {
+                all_aliases.push(alias.clone());
+            }
+        }
+
+        let mut subagent_items = Vec::new();
+        for alias in &all_aliases {
+            let primary_model = if let Some(agent_cfg) = config.agents.get(alias) {
                 get_model_name_for_ref(config, agent_cfg.model_provider.as_str())
             } else {
                 "Not configured".to_string()
             };
-            subagent_items.push(format!("{} (Current: {})", s, primary_model));
+            subagent_items.push(format!("{} (Current: {})", alias, primary_model));
         }
+        subagent_items.push("➕ Create new custom subagent".to_string());
         subagent_items.push("Exit".to_string());
 
         let selection = Select::with_theme(&theme)
@@ -1615,12 +1976,59 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
             break;
         }
 
-        let subagent_name = subagents[selection];
-        let description = descriptions
-            .iter()
-            .find(|(n, _)| *n == subagent_name)
-            .map(|(_, d)| *d)
-            .unwrap_or("");
+        // Resolve subagent_name and description from selection
+        let (subagent_name, description): (String, String) =
+            if selection == all_aliases.len() {
+                // "Create new custom subagent"
+                let alias: String = Input::with_theme(&theme)
+                    .with_prompt("Enter alias for the new custom subagent")
+                    .interact_text()?;
+                if alias.trim().is_empty() {
+                    println!("{}", console::style("✓ Cancelled").yellow());
+                    continue;
+                }
+                let alias = alias.trim().to_string();
+                let desc: String = Input::with_theme(&theme)
+                    .with_prompt("Enter a description (what this subagent does)")
+                    .interact_text()?;
+                let agent_cfg = config.agents.entry(alias.clone()).or_default();
+                agent_cfg.description = desc;
+                agent_cfg.risk_profile = "default".to_string();
+                agent_cfg.runtime_profile = "default".to_string();
+                config.mark_dirty(&format!("agents.{}", alias));
+                config.save_dirty().await?;
+                println!(
+                    "{}",
+                    console::style(format!("✓ Custom subagent '{}' created.", alias)).green()
+                );
+                let desc_s = descriptions
+                    .iter()
+                    .find(|(n, _)| *n == alias)
+                    .map(|(_, d)| d.to_string())
+                    .unwrap_or_default();
+                (alias, desc_s)
+            } else {
+                let subagent_name = all_aliases[selection].clone();
+                let description = descriptions
+                    .iter()
+                    .find(|(n, _)| *n == subagent_name)
+                    .map(|(_, d)| d.to_string())
+                    .or_else(|| {
+                        config
+                            .agents
+                            .get(&subagent_name)
+                            .and_then(|c| {
+                                if c.description.is_empty() {
+                                    None
+                                } else {
+                                    Some(c.description.clone())
+                                }
+                            })
+                    })
+                    .unwrap_or_default();
+                (subagent_name, description)
+            };
+
 
         println!();
         println!(
@@ -1633,7 +2041,25 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
         println!();
 
         loop {
-            let agent_cfg = config.agents.get(subagent_name);
+            let agent_cfg = config.agents.get(&subagent_name);
+            // Refresh description from config (may have been edited)
+            let current_desc = descriptions
+                .iter()
+                .find(|(n, _)| *n == subagent_name)
+                .map(|(_, d)| d.to_string())
+                .or_else(|| {
+                    config
+                        .agents
+                        .get(&subagent_name)
+                        .and_then(|c| {
+                            if c.description.is_empty() {
+                                None
+                            } else {
+                                Some(c.description.clone())
+                            }
+                        })
+                })
+                .unwrap_or_default();
             let has_primary = agent_cfg.is_some_and(|c| !c.model_provider.is_empty());
             let fallbacks = agent_cfg
                 .map(|c| c.model_fallbacks.clone())
@@ -1669,6 +2095,7 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
             let fb3_tick = if has_fb3 { "✓" } else { " " };
 
             let options = vec![
+                format!("Description: {}", current_desc),
                 format!(
                     "[{}] Primary Model: {}",
                     primary_tick, primary_model_display
@@ -1688,8 +2115,19 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
 
             match opt_sel {
                 0 => {
+                    let new_desc: String = Input::<String>::with_theme(&theme)
+                        .with_prompt("Enter a description for this subagent")
+                        .default(current_desc.clone())
+                        .interact_text()?;
+                    let agent_cfg = config.agents.entry(subagent_name.to_string()).or_default();
+                    agent_cfg.description = new_desc.trim().to_string();
+                    config.mark_dirty(&format!("agents.{}", subagent_name));
+                    config.save_dirty().await?;
+                    println!("{}", console::style("✓ Description updated").green());
+                }
+                1 => {
                     if let Some((family, model_id)) =
-                        select_subagent_model(subagent_name, config, &theme, 0).await?
+                        select_subagent_model(&subagent_name, config, &theme, 0).await?
                     {
                         let alias = format!("{}", subagent_name);
                         configure_subagent_provider_alias(config, &family, &alias, &model_id)?;
@@ -1702,9 +2140,9 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
                         config.save_dirty().await?;
                     }
                 }
-                1 => {
+                2 => {
                     if let Some((family, model_id)) =
-                        select_subagent_model(subagent_name, config, &theme, 1).await?
+                        select_subagent_model(&subagent_name, config, &theme, 1).await?
                     {
                         let alias = format!("{}_fallback_1", subagent_name);
                         configure_subagent_provider_alias(config, &family, &alias, &model_id)?;
@@ -1718,9 +2156,9 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
                         config.save_dirty().await?;
                     }
                 }
-                2 => {
+                3 => {
                     if let Some((family, model_id)) =
-                        select_subagent_model(subagent_name, config, &theme, 2).await?
+                        select_subagent_model(&subagent_name, config, &theme, 2).await?
                     {
                         let alias = format!("{}_fallback_2", subagent_name);
                         configure_subagent_provider_alias(config, &family, &alias, &model_id)?;
@@ -1733,9 +2171,9 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
                         config.save_dirty().await?;
                     }
                 }
-                3 => {
+                4 => {
                     if let Some((family, model_id)) =
-                        select_subagent_model(subagent_name, config, &theme, 3).await?
+                        select_subagent_model(&subagent_name, config, &theme, 3).await?
                     {
                         let alias = format!("{}_fallback_3", subagent_name);
                         configure_subagent_provider_alias(config, &family, &alias, &model_id)?;
@@ -1748,7 +2186,7 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
                         config.save_dirty().await?;
                     }
                 }
-                4 => {
+                5 => {
                     let def_ref = config
                         .agents
                         .get("assistant")
@@ -1781,7 +2219,7 @@ async fn run_configure_subagents_wizard(config: &mut Config) -> Result<()> {
                     config.save_dirty().await?;
 
                     let (primary_provider_ref, fallbacks_snapshot) = {
-                        let agent_cfg = config.agents.get(subagent_name).unwrap();
+                        let agent_cfg = config.agents.get(&subagent_name).unwrap();
                         (
                             agent_cfg.model_provider.as_str().to_string(),
                             agent_cfg.model_fallbacks.clone(),

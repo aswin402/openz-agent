@@ -39,6 +39,7 @@ pub mod sop_execute;
 pub mod sop_list;
 pub mod sop_status;
 pub mod spawn_subagent;
+pub mod subagent_manage;
 pub mod verifiable_intent;
 
 // Tool types from zeroclaw-tools (direct imports, no shims)
@@ -126,6 +127,7 @@ pub use zeroclaw_api::tool::{Tool, ToolResult, ToolSpec};
 
 // Local tool re-exports (tools with root deps, kept in misc)
 use crate::tools::spawn_subagent::SpawnSubagentTool;
+use crate::tools::subagent_manage::SubAgentManageTool;
 pub use cron_add::CronAddTool;
 pub use cron_list::CronListTool;
 pub use cron_remove::CronRemoveTool;
@@ -486,6 +488,21 @@ pub fn all_tools_with_runtime(
         )),
         Arc::new(
             SpawnSubagentTool::new(
+                Arc::new(root_config.clone()),
+                agent_alias,
+                mcp_registry.clone(),
+            )
+            .with_subagent_caller(is_subagent_caller),
+        ),
+        // Primary-model authority surface for the SubAgent lifecycle
+        // (spawn / list / status / stop / set_model). See
+        // `tools/subagent_manage.rs` for the depth-1 cap and
+        // per-primary scoping semantics. The same
+        // `is_subagent_caller` flag used by `SpawnSubagentTool` is
+        // plumbed in so a SubAgent cannot exercise primary
+        // authority over its siblings.
+        Arc::new(
+            SubAgentManageTool::new(
                 Arc::new(root_config.clone()),
                 agent_alias,
                 mcp_registry.clone(),

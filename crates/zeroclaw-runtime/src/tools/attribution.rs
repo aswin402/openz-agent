@@ -28,6 +28,7 @@ use crate::tools::sop_execute::SopExecuteTool;
 use crate::tools::sop_list::SopListTool;
 use crate::tools::sop_status::SopStatusTool;
 use crate::tools::spawn_subagent::SpawnSubagentTool;
+use crate::tools::subagent_manage::SubAgentManageTool;
 use crate::tools::verifiable_intent::VerifiableIntentTool;
 
 tool_attribution!(CronAddTool, ToolKind::Plugin);
@@ -52,6 +53,7 @@ tool_attribution!(SopExecuteTool, ToolKind::SopExecute);
 tool_attribution!(SopListTool, ToolKind::SopList);
 tool_attribution!(SopStatusTool, ToolKind::SopStatus);
 tool_attribution!(SpawnSubagentTool, ToolKind::SpawnSubagent);
+tool_attribution!(SubAgentManageTool, ToolKind::SubAgentManage);
 tool_attribution!(VerifiableIntentTool, ToolKind::Plugin);
 
 // Arc-wrapping shell: surface the inner tool's attribution so the

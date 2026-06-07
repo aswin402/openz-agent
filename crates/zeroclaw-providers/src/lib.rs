@@ -1444,6 +1444,98 @@ pub fn create_routed_model_provider_with_options(
     )))
 }
 
+/// Build a resilient model provider for an agent, including its
+/// `model_fallbacks` chain from the agent config.
+///
+/// 1. Creates the primary provider via `create_routed_model_provider_with_options`.
+/// 2. Resolves each entry in the agent's `model_fallbacks` into a provider.
+/// 3. Wraps all providers in a single [`ReliableModelProvider`] so the
+///    fallback chain is tried in order on failure.
+pub fn create_resilient_provider_for_agent(
+    config: &zeroclaw_config::schema::Config,
+    agent_alias: &str,
+    primary_name: &str,
+    api_key: Option<&str>,
+    api_url: Option<&str>,
+    reliability: &zeroclaw_config::schema::ReliabilityConfig,
+    model_routes: &[zeroclaw_config::schema::ModelRouteConfig],
+    default_model: &str,
+    options: &ModelProviderRuntimeOptions,
+) -> anyhow::Result<Box<dyn ModelProvider>> {
+    let primary = create_routed_model_provider_with_options(
+        config, primary_name, api_key, api_url, reliability,
+        model_routes, default_model, options,
+    )?;
+
+    // Get the agent's fallback provider refs from config.
+    let fallback_refs: Vec<String> = config
+        .agents
+        .get(agent_alias)
+        .map(|cfg| cfg.model_fallbacks.clone())
+        .unwrap_or_default();
+
+    if fallback_refs.is_empty() {
+        return Ok(primary);
+    }
+
+    // We need to add fallback providers into the ReliableModelProvider.
+    // The primary is already a ReliableModelProvider (non-routed path) or
+    // a RouterModelProvider (routed path). For the non-routed case we can
+    // extract and re-wrap; for the routed case we add a separate
+    // ReliableModelProvider wrapper.
+    //
+    // Since we can't downcast Box<dyn ModelProvider>, we build a fresh
+    // ReliableModelProvider that wraps the primary as its first entry
+    // and fallback providers as subsequent entries. The outer wrapper
+    // delegates to the primary first, then tries each fallback.
+
+    let mut all_providers: Vec<(String, Box<dyn ModelProvider>)> = Vec::new();
+    let primary_name_owned = primary_name.to_string();
+
+    // Add primary directly — it already has its own retry logic.
+    all_providers.push((primary_name_owned.clone(), primary));
+
+    // Create fallback providers for each fallback ref.
+    for fb_ref in &fallback_refs {
+        let fb_name = fb_ref.trim();
+        if fb_name.is_empty() || all_providers.iter().any(|(n, _)| n == fb_name) {
+            continue;
+        }
+        match create_resilient_model_provider_from_ref(
+            config, fb_name, None, None, reliability, options,
+        ) {
+            Ok(fb_provider) => {
+                all_providers.push((fb_name.to_string(), fb_provider));
+            }
+            Err(e) => {
+                ::zeroclaw_log::record!(
+                    WARN,
+                    ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Note)
+                        .with_outcome(::zeroclaw_log::EventOutcome::Unknown)
+                        .with_attrs(::serde_json::json!({"fallback": fb_name, "error": format!("{e}")})),
+                    "Failed to create fallback model provider {fb_name}, skipping"
+                );
+            }
+        }
+    }
+
+    // No fallbacks resolved — return the original primary directly.
+    if all_providers.len() <= 1 {
+        return Ok(all_providers.into_iter().next().unwrap().1);
+    }
+
+    // Outer wrapper with zero retries — each sub-provider handles its own
+    // retry logic. The outer just tries each provider in sequence.
+    let outer = ReliableModelProvider::new(
+        agent_alias,
+        all_providers,
+        0, // no additional retries
+        reliability.provider_backoff_ms,
+    );
+
+    Ok(Box::new(outer))
+}
+
 /// Information about a supported model model_provider for display purposes.
 pub struct ModelProviderInfo {
     /// Canonical name used in config (e.g. `"openrouter"`)

@@ -1,18 +1,17 @@
 //! Channel implementations and orchestration for messaging platform integrations.
 //!
-//! **Channels trimmed 2026-06-02**: only `discord` + `telegram` + `whatsapp-web/cloud` +
-//! `acp-server` (inbound ACP) are compiled by default. The 25 other channels
-//! (slack, signal, matrix, nostr, imessage, email, lark, wechat, qq, bluesky,
-//! twitter, reddit, notion, linq, wati, nextcloud, mochat, wecom, clawdtalk,
-//! webhook, voice-call, voice-wake, etc.) are no longer wired. Re-add by
-//! reintroducing the `#[cfg(feature = "...")]` block + the corresponding file
-//! in `src/` + the feature flag in `Cargo.toml` and the workspace `Cargo.toml`.
+//! **Channels compiled by default**: `discord` + `telegram` + `whatsapp-web/cloud` +
+//! `acp-server`. The 25 other channels (slack, signal, matrix, nostr, imessage,
+//! email, lark, wechat, qq, bluesky, twitter, reddit, notion, linq, wati,
+//! nextcloud, mochat, wecom, clawdtalk, webhook, voice-call, voice-wake, etc.)
+//! can be individually enabled via `--features channel-slack,channel-signal,...`.
 
 #![allow(
     clippy::to_string_in_format_args,
     clippy::useless_format,
     clippy::explicit_auto_deref
 )]
+#![cfg_attr(feature = "channel-matrix", recursion_limit = "256")]
 
 pub mod allowlist;
 pub mod orchestrator;
@@ -26,11 +25,65 @@ pub mod link_enricher;
 pub mod transcription;
 pub mod tts;
 
-// Feature-gated channels (trimmed 2026-06-02)
+// Feature-gated channels
+#[cfg(feature = "channel-bluesky")]
+pub mod bluesky;
+#[cfg(feature = "channel-clawdtalk")]
+pub mod clawdtalk;
+#[cfg(feature = "channel-dingtalk")]
+pub mod dingtalk;
 #[cfg(feature = "channel-discord")]
 pub mod discord;
+#[cfg(feature = "channel-email")]
+pub mod email_channel;
+#[cfg(feature = "channel-email")]
+pub mod gmail_push;
+#[cfg(feature = "channel-imessage")]
+pub mod imessage;
+#[cfg(feature = "channel-irc")]
+pub mod irc;
+#[cfg(feature = "channel-lark")]
+pub mod lark;
+#[cfg(feature = "channel-line")]
+pub mod line;
+#[cfg(feature = "channel-linq")]
+pub mod linq;
+#[cfg(feature = "channel-matrix")]
+pub mod matrix;
+#[cfg(feature = "channel-mattermost")]
+pub mod mattermost;
+#[cfg(feature = "channel-mochat")]
+pub mod mochat;
+#[cfg(feature = "channel-nextcloud")]
+pub mod nextcloud_talk;
+#[cfg(feature = "channel-nostr")]
+pub mod nostr;
+#[cfg(feature = "channel-notion")]
+pub mod notion;
+#[cfg(feature = "channel-qq")]
+pub mod qq;
+#[cfg(feature = "channel-reddit")]
+pub mod reddit;
+#[cfg(feature = "channel-signal")]
+pub mod signal;
+#[cfg(feature = "channel-slack")]
+pub mod slack;
 #[cfg(feature = "channel-telegram")]
 pub mod telegram;
+#[cfg(feature = "channel-twitter")]
+pub mod twitter;
+#[cfg(feature = "channel-voice-call")]
+pub mod voice_call;
+#[cfg(feature = "voice-wake")]
+pub mod voice_wake;
+#[cfg(feature = "channel-wati")]
+pub mod wati;
+#[cfg(feature = "channel-webhook")]
+pub mod webhook;
+#[cfg(feature = "channel-wechat")]
+pub mod wechat;
+#[cfg(feature = "channel-wecom")]
+pub mod wecom;
 #[cfg(any(feature = "channel-whatsapp-cloud", feature = "whatsapp-web"))]
 pub mod whatsapp;
 #[cfg(feature = "whatsapp-web")]

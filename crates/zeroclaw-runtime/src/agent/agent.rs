@@ -1354,7 +1354,10 @@ impl Agent {
         } else if std::env::var("OPENAI_API_KEY").is_ok() {
             auto_vp = Some(("openai".to_string(), "gpt-4o-mini".to_string()));
         } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            auto_vp = Some(("anthropic".to_string(), "claude-3-5-sonnet-latest".to_string()));
+            auto_vp = Some((
+                "anthropic".to_string(),
+                "claude-3-5-sonnet-latest".to_string(),
+            ));
         }
 
         if let Some((vp_name, vm_name)) = auto_vp {
@@ -1367,24 +1370,37 @@ impl Agent {
                     );
 
                     let dummy_messages = vec![ChatMessage::user(vision_prompt)];
-                    if let Ok(prepared) = zeroclaw_providers::multimodal::prepare_messages_for_provider(
-                        &dummy_messages,
-                        &self.multimodal_config,
-                    ).await {
-                        if let Ok(resp) = vp_instance.chat(
-                            ChatRequest {
-                                messages: &prepared.messages,
-                                tools: None,
-                            },
-                            &vm_name,
-                            Some(0.0),
-                        ).await {
+                    if let Ok(prepared) =
+                        zeroclaw_providers::multimodal::prepare_messages_for_provider(
+                            &dummy_messages,
+                            &self.multimodal_config,
+                        )
+                        .await
+                    {
+                        if let Ok(resp) = vp_instance
+                            .chat(
+                                ChatRequest {
+                                    messages: &prepared.messages,
+                                    tools: None,
+                                },
+                                &vm_name,
+                                Some(0.0),
+                            )
+                            .await
+                        {
                             if let Some(desc) = resp.text {
                                 let mut temp_text = user_message.to_string();
                                 while let Some(start_idx) = temp_text.find("[IMAGE:") {
                                     if let Some(end_idx) = temp_text[start_idx..].find(']') {
-                                        let full_marker = &temp_text[start_idx..start_idx + end_idx + 1];
-                                        temp_text = temp_text.replace(full_marker, &format!("\n### [Image Description (vision-agent)]\n{}\n", desc));
+                                        let full_marker =
+                                            &temp_text[start_idx..start_idx + end_idx + 1];
+                                        temp_text = temp_text.replace(
+                                            full_marker,
+                                            &format!(
+                                                "\n### [Image Description (vision-agent)]\n{}\n",
+                                                desc
+                                            ),
+                                        );
                                     } else {
                                         break;
                                     }
@@ -2005,7 +2021,7 @@ impl Agent {
             let response = match self.turn(&msg.content).await {
                 Ok(resp) => resp,
                 Err(e) => {
-                    eprintln!("\nError: {e}\n");
+                    eprintln!("\n{}\n", console::style(format!("Error: {e}")).red().bold());
                     continue;
                 }
             };

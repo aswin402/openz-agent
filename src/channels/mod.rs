@@ -1,6 +1,4 @@
 pub use zeroclaw_channels::orchestrator::*;
-#[cfg(feature = "channel-matrix")]
-pub mod matrix;
 #[cfg(feature = "channel-telegram")]
 pub mod telegram;
 pub mod session_backend {
@@ -36,16 +34,6 @@ pub async fn handle_command(command: crate::ChannelCommands, config: &Config) ->
                 let notion_configured =
                     config.notion.enabled && !config.notion.database_id.trim().is_empty();
                 println!("  {} Notion", if notion_configured { "✅" } else { "❌" });
-            }
-            if !cfg!(feature = "channel-matrix") {
-                println!(
-                    "  ℹ️ Matrix channel support is disabled in this build (enable `channel-matrix`)."
-                );
-            }
-            if !cfg!(feature = "channel-lark") {
-                println!(
-                    "  ℹ️ Lark/Feishu channel support is disabled in this build (enable `channel-lark`)."
-                );
             }
             println!("\nTo start channels: zeroclaw channel start");
             println!("To check health:    zeroclaw channel doctor");

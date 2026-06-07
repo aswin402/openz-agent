@@ -404,6 +404,18 @@ impl ReliableModelProvider {
         self
     }
 
+    /// Add additional model providers to the fallback chain.
+    /// These are tried in order after the primary provider exhausts
+    /// its retries for each model in the model chain. Each extra entry
+    /// gets its own retry budget — same max_retries, same backoff.
+    pub fn with_additional_providers(
+        mut self,
+        providers: Vec<(String, Box<dyn ModelProvider>)>,
+    ) -> Self {
+        self.model_providers.extend(providers);
+        self
+    }
+
     /// Test-only hook: install per-model failover chains. Production builds
     /// never call this — the schema has no surface for it.
     #[cfg(test)]

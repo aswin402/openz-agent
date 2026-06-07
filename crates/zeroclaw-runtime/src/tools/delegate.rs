@@ -1662,6 +1662,7 @@ impl DelegateTool {
                 "delegate",
                 None,
                 &self.multimodal_config,
+                None, // vision_provider
                 max_iterations,
                 Some(self.cancellation_token.child_token()),
                 None,

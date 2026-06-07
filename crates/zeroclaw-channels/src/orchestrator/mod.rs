@@ -3837,6 +3837,7 @@ async fn process_channel_message_body(
                         msg.channel.as_str(),
                         Some(msg.reply_target.as_str()),
                         &ctx.multimodal,
+                        None, // vision_provider: channel orchestrator doesn't pre-resolve
                         ctx.max_tool_iterations,
                         Some(cancellation_token.clone()),
                         delta_tx.clone(),

@@ -143,6 +143,73 @@ pub fn build_system_prompt_with_mode_and_autonomy(
         );
     }
 
+    // ── 0c. ORCHESTRATOR role (primary-model only) ──────────────
+    //
+    // The primary model is an ORCHESTRATOR — its job is to decompose
+    // the user's request, dispatch each part to the right specialized
+    // subagent, and synthesize the results. It does NOT execute tasks
+    // itself. The `subagent_manage` tool is the primary model's
+    // authority surface for spawning, listing, monitoring, stopping,
+    // and changing the model of its subagents.
+    //
+    // The auto-dispatch system may already have spawned a subagent
+    // for this turn — the dispatched context appears at the top of
+    // your user message. Synthesize that into your final answer.
+    let has_subagent_authority = tools.iter().any(|(name, _)| *name == "subagent_manage");
+    if has_subagent_authority {
+        prompt.push_str(
+            "## 🎯 ORCHESTRATOR — YOU ARE NOT A WORKER\n\n\
+             You are the ORCHESTRATOR. Your ONLY job is to decompose the user's request, \
+             dispatch each part to specialized subagents, and synthesize the results. \
+             You NEVER execute tasks yourself — you delegate.\n\n\
+             ### Automatic planning\n\
+             When you receive a user message, the system may already have \
+             dispatched it to a **`planner`** (or `research-agent`) subagent. If you see \
+             `[📋 Plan from planner]` at the top of your user message, that is the \
+             planner's task breakdown. **FOLLOW THAT PLAN.**\n\n\
+             ### The orchestration protocol (MUST follow)\n\
+             1. **Plan first** — read the plan (if provided) or create one mentally. \
+             Never start executing without knowing what subagents you need.\n\
+             2. **Dispatch workers** — for each task in the plan, spawn the right \
+             subagent using `subagent_manage` with `action: \"spawn\"`. Use specific \
+             prompts for each subagent — don't just forward the whole user message.\n\
+             3. **Run sequentially or in parallel** — independent subagents can run \
+             concurrently; dependent ones must wait for previous results.\n\
+             4. **Validate** — if a `validator` agent is configured, spawn it with \
+             the combined output of all workers to verify correctness.\n\
+             5. **Synthesize** — combine everything into a final answer in your own \
+             voice. Never mention subagents or the plan to the user.\n\n\
+             ### Dispatch rules (MUST — no exceptions)\n\
+             1. **Vision / image / OCR / screenshot** → spawn `vision-agent`.\n\
+             2. **Code** (write/edit/review/refactor/debug/test) → spawn `coder`.\n\
+             3. **Research / search / fact-checking** → spawn `research-agent`.\n\
+             4. **Documentation / README / changelog** → spawn `docs-agent`.\n\
+             5. **Testing / QA** → spawn `tester` (or `coder` if tester unavailable).\n\
+             6. **Validation / review** → spawn `validator` (or `reviewer`).\n\
+             7. NEVER use tools like `shell`, `web_search`, `file_write`, `http_request` \
+             directly. If you need something done, spawn a subagent.\n\
+             8. NEVER ask the user to pick a subagent. Never expose subagent names. \
+             Never say \"I'll delegate this\". Decide and dispatch silently.\n\n\
+             ### How to discover available subagents\n\
+             Use `subagent_manage` with `action: \"list\"` to see active children. \
+             Standard roster: `planner`, `vision-agent`, `coder`, `research-agent`, \
+             `tester`, `validator`, `memory-agent`, `skill-creator`, `docs-agent`, \
+             `reviewer`, `worker`. Custom agents defined in `[agents.<alias>]` with a \
+             `description` field also appear below.\n\n\
+             ### `subagent_manage` actions\n\
+             - `action: \"spawn\"` — start a subagent. Requires `target_alias` + `prompt`.\n\
+             - `action: \"list\"` — enumerate active subagents.\n\
+             - `action: \"status\"` — full snapshot by `id`.\n\
+             - `action: \"stop\"` — cancel a subagent by `id`.\n\
+             - `action: \"set_model\"` — stop + respawn with a different model.\n\n\
+             ### Limits\n\
+             - Max 2 concurrent subagents. Beyond that, the tool refuses.\n\
+             - Subagents inherit your security policy — they cannot escalate.\n\
+             - Subagents cannot spawn subagents (depth-1 cap).\n\
+             - **When in doubt → SPAWN. Do NOT do the work yourself.**\n\n",
+        );
+    }
+
     // ── 1. Tooling ──────────────────────────────────────────────
     if !tools.is_empty() && !native_tools {
         prompt.push_str("## Tools\n\n");
@@ -274,7 +341,12 @@ pub fn build_system_prompt_with_mode_and_autonomy(
                 Err(e) => {
                     // Log error but don't fail - fall back to OpenClaw
                     eprintln!(
-                        "Warning: Failed to load AIEOS identity: {e}. Using OpenClaw format."
+                        "{}",
+                        console::style(format!(
+                            "Warning: Failed to load AIEOS identity: {e}. Using OpenClaw format."
+                        ))
+                        .yellow()
+                        .bold()
                     );
                     let max_chars = bootstrap_max_chars.unwrap_or(BOOTSTRAP_MAX_CHARS);
                     load_openclaw_bootstrap_files(&mut prompt, workspace_dir, max_chars);
@@ -424,4 +496,53 @@ fn load_workspace_rules_files(
             inject_workspace_file(prompt, workspace_dir, filename, max_chars_per_file);
         }
     }
+}
+
+/// Format the list of user-defined subagents for the orchestrator prompt.
+/// Returns a formatted section listing all configured agents that have a
+/// non-empty `description` and are not standard built-in roles.
+pub fn format_agent_roster(
+    agents: &std::collections::HashMap<String, zeroclaw_config::schema::AliasedAgentConfig>,
+) -> String {
+    const BUILT_IN: &[&str] = &[
+        "planner",
+        "vision-agent",
+        "coder",
+        "research-agent",
+        "tester",
+        "validator",
+        "memory-agent",
+        "skill-creator",
+        "docs-agent",
+        "reviewer",
+        "worker",
+    ];
+
+    let mut custom: Vec<String> = Vec::new();
+    for (alias, cfg) in agents {
+        let desc = cfg.description.trim();
+        if desc.is_empty() {
+            continue;
+        }
+        if BUILT_IN.contains(&alias.as_str()) {
+            continue;
+        }
+        custom.push(format!("`{alias}` — {desc}"));
+    }
+
+    if custom.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from(
+        "### Custom Subagents Available in Config\n\n\
+         These agents are defined in your config and can be spawned via \
+         `subagent_manage` with `action: \"spawn\"` and `target_alias: \"<alias>\"`:\n",
+    );
+    for line in &custom {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push('\n');
+    out
 }

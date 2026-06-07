@@ -6,12 +6,12 @@
 //! tracing-span shape, and audit attribution stay uniform.
 
 use crate::agent::loop_::AgentRunOverrides;
-use crate::subagent::{SubAgentOverrides, SubAgentSpawn};
+use crate::subagent::{SubAgentOverrides, SubAgentRegistry, SubAgentSpawn, SubAgentStatus};
 use crate::tools::McpRegistry;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use zeroclaw_api::tool::{Tool, ToolResult};
 use zeroclaw_config::schema::Config;
 use zeroclaw_log::scope;
@@ -24,6 +24,16 @@ pub struct SpawnSubagentTool {
     /// Shared MCP registry from the parent agent — passed so the subagent
     /// doesn't re-spawn MCP server processes.
     mcp_registry: Option<Arc<McpRegistry>>,
+    /// Shared tool registry from the parent agent. Set after the
+    /// parent's tool registry is built (the agent loop wraps the
+    /// final `Vec<Box<dyn Tool>>` in an `Arc<RwLock<…>>` and
+    /// installs it here so the subagent inherits the parent's
+    /// tool `Box`es — ShellTool's sandbox, file guards, Memory
+    /// sqlite handle, MCP wrappers all stay single-instance).
+    /// `RwLock<Option<…>>` because construction order is
+    /// `SpawnSubagentTool::new` first, registry build second, then
+    /// `set_parent_tools` once we have the final list.
+    parent_tools: Arc<RwLock<Option<Arc<RwLock<Vec<Box<dyn Tool>>>>>>>,
     /// `true` when this tool is registered inside a run that is itself
     /// a SubAgent. Triggers a depth-1 cap refusal in `execute` before
     /// any spawn work happens. Set by the agent loop from
@@ -41,8 +51,16 @@ impl SpawnSubagentTool {
             config,
             parent_alias: parent_alias.into(),
             mcp_registry,
+            parent_tools: Arc::new(RwLock::new(None)),
             is_subagent_caller: false,
         }
+    }
+
+    /// Install the parent's tool registry handle so spawned subagents
+    /// inherit the parent's tool `Box`es instead of rebuilding. Called
+    /// by the agent loop once `tools_registry` is finalized.
+    pub fn set_parent_tools(&self, parent_tools: Arc<RwLock<Vec<Box<dyn Tool>>>>) {
+        *self.parent_tools.write().unwrap() = Some(parent_tools);
     }
 
     /// Mark this tool instance as belonging to a SubAgent's tool
@@ -55,8 +73,14 @@ impl SpawnSubagentTool {
     }
 }
 
+// Process-global counter for the legacy `spawn_subagent` concurrency
+// limit. Two active subagents max per process. The new
+// `subagent_manage` tool uses the registry for its own limit, so the
+// two tools together cap the total at 2 per parent (the new tool
+// checks the registry; this counter would need to be per-parent to
+// share limits; the pre-existing behavior is process-global and we
+// keep that shape for backward compat).
 use std::sync::atomic::{AtomicUsize, Ordering};
-
 static ACTIVE_SUBAGENTS: AtomicUsize = AtomicUsize::new(0);
 
 #[async_trait]
@@ -96,7 +120,12 @@ impl Tool for SpawnSubagentTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<ToolResult> {
-        // Enforce the concurrency limit: max 2 active subagents spawned simultaneously
+        // Enforce the concurrency limit: max 2 active subagents spawned
+        // simultaneously (process-global). The pre-existing static
+        // counter is preserved for backward compatibility — the new
+        // `subagent_manage` tool uses the per-parent registry count
+        // (see `SubAgentRegistry::count_active_for`) so the two
+        // surfaces don't accidentally compose into a higher limit.
         let active = ACTIVE_SUBAGENTS.load(Ordering::SeqCst);
         if active >= 2 {
             return Ok(ToolResult {
@@ -108,7 +137,10 @@ impl Tool for SpawnSubagentTool {
             });
         }
 
-        // Increment active subagents count and use a guard to automatically decrement on exit
+        // Increment active subagents count and use a guard to
+        // automatically decrement on exit. The guard is a
+        // Drop-typed local so every return path (success, structured
+        // failure, panic) cleans up the counter.
         ACTIVE_SUBAGENTS.fetch_add(1, Ordering::SeqCst);
         struct ActiveGuard;
         impl Drop for ActiveGuard {
@@ -199,13 +231,30 @@ impl Tool for SpawnSubagentTool {
             }
         };
 
+        // Register the run in the process-wide registry BEFORE the
+        // blocking agent::run call so the primary model (via the
+        // `subagent_manage` tool) can see the subagent and stop it
+        // while it's running. The handle is deregistered on every
+        // terminal transition regardless of how the run finished
+        // (success, error, or panic). The handle's parent_alias is
+        // the tool's primary alias; target_alias is the spawned
+        // subagent's alias (defaults to the parent when no override).
+        let registry = SubAgentRegistry::global();
         let run_id = uuid::Uuid::new_v4().to_string();
-
         let temperature: Option<f64> = self
             .config
             .model_provider_for_agent(&self.parent_alias)
             .and_then(|e| e.temperature);
         let session_path = std::path::PathBuf::from(format!("subagent-{run_id}"));
+
+        let handle = crate::subagent::SubAgentHandle::new(
+            &self.parent_alias,
+            &subagent_ctx.parent_alias,
+            &prompt,
+            None,
+            None,
+        );
+        let handle_id = registry.register(handle.clone());
 
         // Pass the validated SubAgent context as run-time overrides so
         // the subset-confirmed policy reaches the agent loop instead
@@ -220,7 +269,11 @@ impl Tool for SpawnSubagentTool {
             mcp_registry: self.mcp_registry.clone(),
             allowed_mcp_servers,
         };
+        handle.set_status(SubAgentStatus::Running);
+        handle.set_step("agent loop");
         let parent_alias = subagent_ctx.parent_alias.clone();
+        let handle_for_run = handle.clone();
+        let registry_for_run = registry.clone();
         let run_result = Box::pin(scope!(
             agent_alias: parent_alias,
             session_key: run_id,
@@ -241,21 +294,39 @@ impl Tool for SpawnSubagentTool {
         ))
         .await;
 
+        // Finalize the handle and deregister so the primary model's
+        // `list`/`status` calls see the run as terminal. Status is
+        // chosen by the outcome; the body of the final tool result
+        // echoes the run output back to the calling agent loop.
         match run_result {
-            Ok(response) => Ok(ToolResult {
-                success: true,
-                output: if response.trim().is_empty() {
+            Ok(response) => {
+                let text = if response.trim().is_empty() {
                     "subagent completed without output".to_string()
                 } else {
-                    response
-                },
-                error: None,
-            }),
-            Err(e) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!("subagent run failed: {e}")),
-            }),
+                    response.clone()
+                };
+                handle_for_run.set_output(&text);
+                handle_for_run.set_step("completed");
+                handle_for_run.set_status(SubAgentStatus::Completed);
+                registry_for_run.deregister(&handle_id);
+                Ok(ToolResult {
+                    success: true,
+                    output: text,
+                    error: None,
+                })
+            }
+            Err(e) => {
+                let err_text = format!("subagent run failed: {e}");
+                handle_for_run.set_error(&err_text);
+                handle_for_run.set_step("failed");
+                handle_for_run.set_status(SubAgentStatus::Failed);
+                registry_for_run.deregister(&handle_id);
+                Ok(ToolResult {
+                    success: false,
+                    output: String::new(),
+                    error: Some(err_text),
+                })
+            }
         }
     }
 }
@@ -282,6 +353,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_or_missing_prompt_is_rejected() {
+        // Reset the global counter in case a parallel test left it dirty.
+        ACTIVE_SUBAGENTS.store(0, Ordering::SeqCst);
         let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha", None);
         for args in [json!({}), json!({ "prompt": "   " })] {
             let result = tool
@@ -471,6 +544,11 @@ mod tests {
 
     #[tokio::test]
     async fn enforces_concurrency_limit() {
+        // The concurrency cap is enforced by a process-global static
+        // counter (see `ACTIVE_SUBAGENTS` near the top of the file).
+        // We pre-seed it to the ceiling and verify a spawn is
+        // refused; the parallel test cleanup restores the counter
+        // so the rest of the suite is unaffected.
         ACTIVE_SUBAGENTS.store(2, Ordering::SeqCst);
         let tool = SpawnSubagentTool::new(Arc::new(config_with_agent("alpha")), "alpha", None);
         let result = tool

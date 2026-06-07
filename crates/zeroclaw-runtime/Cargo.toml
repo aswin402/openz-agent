@@ -29,7 +29,8 @@ cron = "0.15"
 dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 directories = "6.0"
 flate2 = "1"
-futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+flume = "0.11"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "alloc"] }
 glob = "0.3"
 hex = "0.4"
 hmac = "0.12"
@@ -83,6 +84,8 @@ opentelemetry_sdk = { version = "0.31", default-features = false, features = ["t
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "metrics", "http-proto", "reqwest-blocking-client", "reqwest-rustls-webpki-roots"], optional = true }
 # Optional deps for specific features
 pdf-extract = { version = "0.10", optional = true }
+fastembed = { version = "5.16", optional = true, default-features = false }
+dashmap = { version = "6", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { version = "0.4", optional = true }
@@ -100,6 +103,7 @@ observability-prometheus = ["dep:prometheus"]
 observability-otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 sandbox-landlock = ["dep:landlock"]
 schema-export = ["dep:schemars", "zeroclaw-config/schema-export"]
+memory-embeddings = ["dep:fastembed", "dep:dashmap"]
 
 
 browser-native = []

@@ -1435,6 +1435,7 @@ pub async fn agent_turn(
         channel_name,
         channel_reply_target,
         multimodal_config,
+        None, // vision_provider: legacy agent_turn callers don't have pre-resolved
         max_tool_iterations,
         None,
         None,
@@ -1561,6 +1562,54 @@ fn maybe_inject_channel_delivery_defaults(
 //   • max_iterations is reached (runaway safety), or
 //   • the cancellation token fires (external abort).
 
+/// Resolve a vision-capable model provider from the configuration.
+/// Checks configured providers for vision support, preferring explicit
+/// vision_model_provider, then configured providers, then environment auto-detection.
+fn resolve_vision_provider_from_config(config: &Config) -> Option<std::sync::Arc<dyn ModelProvider>> {
+    let multimodal = &config.multimodal;
+
+    // 1. Check explicitly configured vision_model_provider
+    if let Some(ref vp) = multimodal.vision_model_provider {
+        if let Ok(vp_instance) = zeroclaw_providers::create_model_provider(vp, None) {
+            if vp_instance.supports_vision() {
+                return Some(std::sync::Arc::from(vp_instance));
+            }
+        }
+    }
+
+    // 2. Check configured model providers for vision support
+    for (provider_type, _, _) in config.providers.models.iter_entries() {
+        if let Ok(vp_instance) = zeroclaw_providers::create_model_provider(provider_type, None) {
+            if vp_instance.supports_vision() {
+                return Some(std::sync::Arc::from(vp_instance));
+            }
+        }
+    }
+
+    // 3. Auto-detect from environment variables
+    if std::env::var("GEMINI_API_KEY").is_ok() {
+        if let Ok(vp_instance) = zeroclaw_providers::create_model_provider("google", None) {
+            if vp_instance.supports_vision() {
+                return Some(std::sync::Arc::from(vp_instance));
+            }
+        }
+    } else if std::env::var("OPENAI_API_KEY").is_ok() {
+        if let Ok(vp_instance) = zeroclaw_providers::create_model_provider("openai", None) {
+            if vp_instance.supports_vision() {
+                return Some(std::sync::Arc::from(vp_instance));
+            }
+        }
+    } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        if let Ok(vp_instance) = zeroclaw_providers::create_model_provider("anthropic", None) {
+            if vp_instance.supports_vision() {
+                return Some(std::sync::Arc::from(vp_instance));
+            }
+        }
+    }
+
+    None
+}
+
 /// Append a receipt footer to the response text if any receipts were collected.
 /// Execute a single turn of the agent loop: send messages, parse tool calls,
 /// execute tools, and loop until the LLM produces a final text response.
@@ -1578,6 +1627,9 @@ pub async fn run_tool_call_loop(
     channel_name: &str,
     channel_reply_target: Option<&str>,
     multimodal_config: &zeroclaw_config::schema::MultimodalConfig,
+    // Pre-resolved vision-capable model provider. If provided, it will be used
+    // for vision requests instead of auto-detecting from environment.
+    vision_provider: Option<std::sync::Arc<dyn ModelProvider>>,
     max_tool_iterations: usize,
     cancellation_token: Option<CancellationToken>,
     on_delta: Option<tokio::sync::mpsc::Sender<DraftEvent>>,
@@ -1740,10 +1792,22 @@ pub async fn run_tool_call_loop(
         // vision_model_provider is configured, create it on demand and use it
         // for this iteration. Otherwise, attempt to auto-detect a vision provider
         // from the environment API keys (Gemini, OpenAI, Anthropic).
-        let vision_model_provider_box: Option<Box<dyn ModelProvider>> = if image_marker_count > 0
+        // If a pre-resolved vision_provider is provided, use it directly.
+        let vision_model_provider_box: Option<std::sync::Arc<dyn ModelProvider>> = if image_marker_count > 0
             && !model_provider.supports_vision()
         {
-            if let Some(ref vp) = multimodal_config.vision_model_provider {
+            if let Some(ref vp) = vision_provider {
+                // Use pre-resolved vision provider
+                if !vp.supports_vision() {
+                    return Err(ProviderCapabilityError {
+                        model_provider: "pre-resolved".to_string(),
+                        capability: "vision".to_string(),
+                        message: "pre-resolved vision provider does not support vision input".to_string(),
+                    }
+                    .into());
+                }
+                Some(vp.clone())
+            } else if let Some(ref vp) = multimodal_config.vision_model_provider {
                 let vp_instance =
                     zeroclaw_providers::create_model_provider(vp, None).map_err(|e| {
                         ::zeroclaw_log::record!(
@@ -1773,7 +1837,7 @@ pub async fn run_tool_call_loop(
                     }
                     .into());
                 }
-                Some(vp_instance)
+                Some(std::sync::Arc::from(vp_instance))
             } else {
                 // Auto-detect a vision provider from the environment
                 let mut auto_vp = None;
@@ -1792,7 +1856,7 @@ pub async fn run_tool_call_loop(
                     if vp_instance.supports_vision() {
                         resolved_vp_name = Some(vp.clone());
                         resolved_vm = Some(vm);
-                        Some(vp_instance)
+                        Some(std::sync::Arc::from(vp_instance))
                     } else {
                         None
                     }
@@ -3171,8 +3235,7 @@ fn get_command_description(cmd: &str) -> &'static str {
         "/commands" => "Show this help message",
         "/clear" => "Clear conversation history",
         "/new" => "Clear conversation history",
-        "/model" => "Switch model interactively or via <p>/<m>",
-        "/models" => "Switch model interactively or via <p>/<m>",
+        "/models" => "Switch model interactively or via /models <p>/<m>",
         "/skills" => "List currently installed skills and details",
         "/mcp" => "List configured MCP servers and details",
         "/status" => "Show current session status details",
@@ -4068,6 +4131,13 @@ pub async fn run(
                 &effective_msg,
             );
 
+            // Resolve a vision-capable provider if the primary doesn't support vision
+            let vision_provider = if !model_provider.supports_vision() {
+                resolve_vision_provider_from_config(&config)
+            } else {
+                None
+            };
+
             #[allow(unused_assignments)]
             let mut response = String::new();
             loop {
@@ -4087,6 +4157,7 @@ pub async fn run(
                             channel_name,
                             None,
                             &config.multimodal,
+                            vision_provider.clone(),
                             agent.max_tool_iterations,
                             None,
                             None,
@@ -4345,6 +4416,13 @@ pub async fn run(
                         &model_name,
                         &provider_runtime_options,
                     )?;
+
+                // Resolve a vision-capable provider if the primary doesn't support vision
+                let vision_provider = if !model_provider.supports_vision() {
+                    resolve_vision_provider_from_config(&config)
+                } else {
+                    None
+                };
                 let (mut tools_registry, _, _, _, _, _) = tools::all_tools_with_runtime(
                     Arc::new(config.clone()),
                     &security,
@@ -4398,7 +4476,6 @@ pub async fn run(
                             "/commands",
                             "/clear",
                             "/new",
-                            "/model",
                             "/models",
                             "/skills",
                             "/mcp",
@@ -4628,8 +4705,7 @@ pub async fn run(
                                                         }
                                                         print!("\r\x1B[J");
 
-                                                        let is_suspending = input_buf == "/model"
-                                                            || input_buf == "/models"
+                                                        let is_suspending = input_buf == "/models"
                                                             || input_buf == "/clear"
                                                             || input_buf == "/new"
                                                             || input_buf == "/configure";
@@ -4960,8 +5036,8 @@ pub async fn run(
                                 console::style("/clear /new").cyan()
                             );
                             println!(
-                                "  {}      Switch model interactively or via <p>/<m>",
-                                console::style("/model /models").cyan()
+                                "  {}           Switch model interactively or via /models <p>/<m>",
+                                console::style("/models").cyan()
                             );
                             println!(
                                 "  {}           List currently installed skills and details",
@@ -5091,7 +5167,7 @@ pub async fn run(
                                 save_interactive_session_history(path, &history)?;
                             }
                             continue;
-                        } else if command == "/model" || command == "/models" {
+                        } else if command == "/models" {
                             if parts.len() >= 2 {
                                 let target = parts[1];
                                 if let Some((p, m)) = target.split_once('/') {
@@ -5121,7 +5197,7 @@ pub async fn run(
                                                 provider_name, model_name
                                             ))
                                             .green()
-                                                                                        .bold()
+                                            .bold()
                                         );
 
                                         observer.record_event(&ObserverEvent::AgentStart {
@@ -5144,7 +5220,7 @@ pub async fn run(
                                 } else {
                                     println!(
                                     "{}",
-                                    console::style("Usage: /model <provider>/<model> (e.g., /model openai/gpt-4o)")
+                                    console::style("Usage: /models <provider>/<model> (e.g., /models openai/gpt-4o)")
                                         .yellow()
                                         .bold()
                                 );
@@ -5152,22 +5228,24 @@ pub async fn run(
                                 continue;
                             }
 
-                            // Interactive Selection
-                            let mut models_list = Vec::new();
+                            // Interactive Selection — grouped by provider
+                            let mut models_by_provider: std::collections::BTreeMap<
+                                String,
+                                Vec<(String, String)>,
+                            > = std::collections::BTreeMap::new();
                             for (p_type, p_alias, profile) in config.providers.models.iter_entries()
                             {
                                 let model_id = match &profile.model {
                                     Some(m) if !m.is_empty() => m.clone(),
                                     _ => "default".to_string(),
                                 };
-                                models_list.push((
-                                    p_type.to_string(),
-                                    p_alias.to_string(),
-                                    model_id,
-                                ));
+                                models_by_provider
+                                    .entry(p_type.to_string())
+                                    .or_default()
+                                    .push((p_alias.to_string(), model_id));
                             }
 
-                            if models_list.is_empty() {
+                            if models_by_provider.is_empty() {
                                 println!(
                                     "{}",
                                     console::style(
@@ -5183,101 +5261,202 @@ pub async fn run(
                                 continue;
                             }
 
-                            let mut items = Vec::new();
-                            for (p_type, p_alias, model_id) in &models_list {
-                                items.push(format!("{p_type}.{p_alias} ({model_id})"));
-                            }
-                            items.push("Cancel".to_string());
+                            let provider_keys: Vec<String> =
+                                models_by_provider.keys().cloned().collect();
 
                             use dialoguer::Select;
                             let theme = get_dialoguer_theme();
-                            let selection = if is_tui_active {
-                                let (_, _h) = crossterm::terminal::size().unwrap_or((80, 24));
-                                crate::agent::tui_events::TUI_SUSPENDED
-                                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                                emit_tui_event(crate::agent::tui_events::RuntimeEvent::Suspended);
-                                // Reset scroll region and restore cursor position
-                                print!("\x1B[s\x1B[r\x1B[u");
-                                let _ = std::io::stdout().flush();
 
-                                let sel = Select::with_theme(&theme)
-                                    .with_prompt("Select active model")
-                                    .items(&items)
-                                    .default(0)
-                                    .interact();
+                            // Helper to run a Select with TUI suspend/resume
+                            let run_select = |theme_ptr: &dialoguer::theme::ColorfulTheme,
+                                              prompt: &str,
+                                              items: &[String],
+                                              default_idx: usize|
+                             -> Option<usize> {
+                                let sel = if is_tui_active {
+                                    let (_, _h) =
+                                        crossterm::terminal::size().unwrap_or((80, 24));
+                                    crate::agent::tui_events::TUI_SUSPENDED
+                                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                                    emit_tui_event(
+                                        crate::agent::tui_events::RuntimeEvent::Suspended,
+                                    );
+                                    print!("\x1B[s\x1B[r\x1B[u");
+                                    let _ = std::io::stdout().flush();
 
-                                let (_, new_h) = crossterm::terminal::size().unwrap_or((80, 24));
-                                // Restore terminal scroll region to 1..=H-3 and cursor position
-                                print!(
-                                    "\x1B[s\x1B[1;{}r\x1B[u\x1B[{};1H",
-                                    new_h.saturating_sub(3),
-                                    new_h.saturating_sub(3)
-                                );
-                                let _ = std::io::stdout().flush();
-                                crate::agent::tui_events::TUI_SUSPENDED
-                                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                                emit_tui_event(crate::agent::tui_events::RuntimeEvent::Resumed);
+                                    let s = Select::with_theme(theme_ptr)
+                                        .with_prompt(prompt)
+                                        .items(items)
+                                        .default(default_idx)
+                                        .interact();
 
-                                sel
-                            } else {
-                                Select::with_theme(&theme)
-                                    .with_prompt("Select active model")
-                                    .items(&items)
-                                    .default(0)
-                                    .interact()
+                                    let (_, new_h) =
+                                        crossterm::terminal::size().unwrap_or((80, 24));
+                                    print!(
+                                        "\x1B[s\x1B[1;{}r\x1B[u\x1B[{};1H",
+                                        new_h.saturating_sub(3),
+                                        new_h.saturating_sub(3)
+                                    );
+                                    let _ = std::io::stdout().flush();
+                                    crate::agent::tui_events::TUI_SUSPENDED
+                                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                                    emit_tui_event(
+                                        crate::agent::tui_events::RuntimeEvent::Resumed,
+                                    );
+                                    s
+                                } else {
+                                    Select::with_theme(theme_ptr)
+                                        .with_prompt(prompt)
+                                        .items(items)
+                                        .default(default_idx)
+                                        .interact()
+                                };
+                                sel.ok()
                             };
 
-                            match selection {
-                                Ok(idx) if idx < models_list.len() => {
-                                    let (new_provider_name, new_alias, new_model_name) =
-                                        &models_list[idx];
-                                    let new_agent_model_provider =
-                                        config.providers.models.find(new_provider_name, new_alias);
-
-                                    match zeroclaw_providers::create_routed_model_provider_with_options(
-                                    &config,
-                                    new_provider_name,
-                                    new_agent_model_provider.and_then(|e| e.api_key.as_deref()),
-                                    new_agent_model_provider.and_then(|e| e.uri.as_deref()),
-                                    &config.reliability,
-                                    &config.model_routes,
-                                    new_model_name,
-                                    &provider_runtime_options,
-                                ) {
-                                    Ok(new_mp) => {
-                                        model_provider = new_mp;
-                                        provider_name = new_provider_name.to_string();
-                                        model_name = new_model_name.to_string();
-                                        println!(
-                                            "{}",
-                                            console::style(format!(
-                                                "✓ Switched active model to: {} ({})",
-                                                provider_name, model_name
-                                            ))
-                                            .green()
-                                                                                        .bold()
-                                        );
-
-                                        observer.record_event(&ObserverEvent::AgentStart {
-                                            model_provider: provider_name.to_string(),
-                                            model: model_name.to_string(),
-                                        });
-                                    }
-                                    Err(err) => {
-                                        println!(
-                                            "{}",
-                                            console::style(format!(
-                                                "✗ Failed to switch model: {}",
-                                                err
-                                            ))
-                                            .red()
-                                            .bold()
-                                        );
-                                    }
-                                }
-                                }
+                            // Step 1: pick provider
+                            let provider_infos = zeroclaw_providers::list_model_providers();
+                            let mut provider_items: Vec<String> = provider_keys
+                                .iter()
+                                .map(|k| {
+                                    let display_name = provider_infos
+                                        .iter()
+                                        .find(|p| p.name == k)
+                                        .map(|p| p.display_name)
+                                        .unwrap_or(k.as_str());
+                                    display_name.to_string()
+                                })
+                                .collect();
+                            provider_items.push("Cancel".to_string());
+                            let provider_sel =
+                                run_select(&theme, "Select provider", &provider_items, 0);
+                            let provider_idx = match provider_sel {
+                                Some(idx) if idx < provider_keys.len() => idx,
                                 _ => {
                                     println!("Cancelled.");
+                                    continue;
+                                }
+                            };
+                            let selected_provider = &provider_keys[provider_idx];
+                            let provider_entries = &models_by_provider[selected_provider];
+
+                            let provider_display_name = provider_infos
+                                .iter()
+                                .find(|p| p.name == selected_provider)
+                                .map(|p| p.display_name)
+                                .unwrap_or(selected_provider.as_str());
+
+                            println!("Fetching models for {}...", provider_display_name);
+
+                            let available_models = match zeroclaw_providers::catalog::list_models_for_family(selected_provider).await {
+                                Ok(models) => models,
+                                Err(e) => {
+                                    println!(
+                                        "{}",
+                                        console::style(format!(
+                                            "✗ Failed to fetch models for {}: {}",
+                                            provider_display_name, e
+                                        ))
+                                        .red()
+                                        .bold()
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            if available_models.is_empty() {
+                                println!(
+                                    "{}",
+                                    console::style(format!(
+                                        "⚠ No models found for {}.",
+                                        provider_display_name
+                                    ))
+                                    .yellow()
+                                    .bold()
+                                );
+                                continue;
+                            }
+
+                            // Step 2: pick model from available models using the custom theme
+                            let mut theme_provider = get_dialoguer_theme();
+                            theme_provider.prompt_style = console::Style::new().color256(99).bold();
+                            theme_provider.prompt_prefix = console::style("".to_string());
+                            theme_provider.prompt_suffix = console::style("".to_string());
+
+                            let mut model_items: Vec<String> = available_models.clone();
+                            model_items.push("Cancel".to_string());
+
+                            let model_sel = run_select(
+                                &theme_provider,
+                                provider_display_name,
+                                &model_items,
+                                0,
+                            );
+
+                            let model_idx = match model_sel {
+                                Some(idx) if idx < available_models.len() => idx,
+                                _ => {
+                                    println!("Cancelled.");
+                                    continue;
+                                }
+                            };
+                            let selected_model = &available_models[model_idx];
+
+                            // Pick which alias to use for this provider.
+                            let selected_alias = if provider_entries.len() == 1 {
+                                &provider_entries[0].0
+                            } else {
+                                provider_entries
+                                    .iter()
+                                    .find(|(alias, _)| alias == "default")
+                                    .map(|(alias, _)| alias)
+                                    .unwrap_or(&provider_entries[0].0)
+                            };
+
+                            let new_agent_model_provider = config
+                                .providers
+                                .models
+                                .find(selected_provider, selected_alias);
+
+                            match zeroclaw_providers::create_routed_model_provider_with_options(
+                                &config,
+                                selected_provider,
+                                new_agent_model_provider.and_then(|e| e.api_key.as_deref()),
+                                new_agent_model_provider.and_then(|e| e.uri.as_deref()),
+                                &config.reliability,
+                                &config.model_routes,
+                                selected_model,
+                                &provider_runtime_options,
+                            ) {
+                                Ok(new_mp) => {
+                                    model_provider = new_mp;
+                                    provider_name = selected_provider.to_string();
+                                    model_name = selected_model.to_string();
+                                    println!(
+                                        "{}",
+                                        console::style(format!(
+                                            "✓ Switched active model to: {} ({})",
+                                            provider_name, model_name
+                                        ))
+                                        .green()
+                                        .bold()
+                                    );
+
+                                    observer.record_event(&ObserverEvent::AgentStart {
+                                        model_provider: provider_name.to_string(),
+                                        model: model_name.to_string(),
+                                    });
+                                }
+                                Err(err) => {
+                                    println!(
+                                        "{}",
+                                        console::style(format!(
+                                            "✗ Failed to switch model: {}",
+                                            err
+                                        ))
+                                        .red()
+                                        .bold()
+                                    );
                                 }
                             }
                             continue;
@@ -5501,7 +5680,12 @@ pub async fn run(
                         )
                         .await
                         {
-                            eprintln!("\nError sending CLI response: {e}\n");
+                            eprintln!(
+                                "\n{}\n",
+                                console::style(format!("Error sending CLI response: {e}"))
+                                    .red()
+                                    .bold()
+                            );
                         }
                         observer.record_event(&ObserverEvent::TurnComplete);
                         if thinking_params.system_prompt_prefix.is_some()
@@ -5899,6 +6083,7 @@ pub async fn run(
                                     channel_name,
                                     None,
                                     &config.multimodal,
+                                    vision_provider.clone(),
                                     agent.max_tool_iterations,
                                     Some(cancel_token.clone()),
                                     Some(delta_tx.clone()),
@@ -6025,7 +6210,12 @@ pub async fn run(
                                     }
                                 }
 
-                                eprintln!("\nError: {e}\n");
+                                eprintln!(
+                                    "\n{}\n",
+                                    console::style(format!("Error: {e}"))
+                                        .red()
+                                        .bold()
+                                );
                                 break String::new();
                             }
                         }
@@ -6046,7 +6236,12 @@ pub async fn run(
                     )
                     .await
                     {
-                        eprintln!("\nError sending CLI response: {e}\n");
+                        eprintln!(
+                            "\n{}\n",
+                            console::style(format!("Error sending CLI response: {e}"))
+                                .red()
+                                .bold()
+                        );
                     }
                     observer.record_event(&ObserverEvent::TurnComplete);
 
@@ -8430,6 +8625,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             3,
             None,
             None,
@@ -8487,6 +8683,7 @@ mod tests {
             "cli",
             None,
             &multimodal,
+            None, // vision_provider
             3,
             None,
             None,
@@ -8548,6 +8745,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             3,
             None,
             None,
@@ -8600,6 +8798,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             3,
             None,
             None,
@@ -8659,6 +8858,7 @@ mod tests {
             "cli",
             None,
             &multimodal,
+            None, // vision_provider
             3,
             None,
             None,
@@ -8719,6 +8919,7 @@ mod tests {
             "cli",
             None,
             &multimodal,
+            None, // vision_provider
             3,
             None,
             None,
@@ -8779,6 +8980,7 @@ mod tests {
             "cli",
             None,
             &multimodal,
+            None, // vision_provider
             3,
             None,
             None,
@@ -8838,6 +9040,7 @@ mod tests {
             "cli",
             None,
             &multimodal,
+            None, // vision_provider
             3,
             None,
             None,
@@ -8896,6 +9099,7 @@ mod tests {
             "cli",
             None,
             &multimodal,
+            None, // vision_provider
             3,
             None,
             None,
@@ -9038,6 +9242,7 @@ mod tests {
             "telegram",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9119,6 +9324,7 @@ mod tests {
             "telegram",
             Some("chat-42"),
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9192,6 +9398,7 @@ mod tests {
             "telegram",
             Some("chat-42"),
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9260,6 +9467,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9341,6 +9549,7 @@ mod tests {
             "telegram",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9412,6 +9621,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9503,6 +9713,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9568,6 +9779,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9637,6 +9849,7 @@ mod tests {
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9701,6 +9914,7 @@ mod tests {
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9763,6 +9977,7 @@ mod tests {
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -9828,6 +10043,7 @@ mod tests {
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             6,
             None,
             None,
@@ -9890,6 +10106,7 @@ mod tests {
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -9951,6 +10168,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10004,6 +10222,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10058,6 +10277,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10112,6 +10332,7 @@ mod tests {
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10168,6 +10389,7 @@ This is an example, not an invocation."#;
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10229,6 +10451,7 @@ This is an example, not an invocation."#;
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -10302,6 +10525,7 @@ This is an example, not an invocation."#;
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10358,6 +10582,7 @@ Done."#;
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10417,6 +10642,7 @@ Done."#;
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10474,6 +10700,7 @@ Done."#;
             "cli",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             None,
@@ -10532,6 +10759,7 @@ This is an example, not an invocation."#;
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -10647,6 +10875,7 @@ This is an example, not an invocation."#;
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -10713,6 +10942,7 @@ This is an example, not an invocation."#;
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -10783,6 +11013,7 @@ This is an example, not an invocation."#;
             "matrix",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -10873,6 +11104,7 @@ This is an example, not an invocation."#;
             "telegram",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -10942,6 +11174,7 @@ This is an example, not an invocation."#;
             "telegram",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -11014,6 +11247,7 @@ This is an example, not an invocation."#;
             "telegram",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             5,
             None,
             Some(tx),
@@ -11881,6 +12115,7 @@ This is an example, not an invocation."#;
             "telegram",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             5,
             None,
             Some(tx),
@@ -11973,6 +12208,7 @@ This is an example, not an invocation."#;
             "telegram",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -13528,6 +13764,7 @@ Let me check the result."#;
             "telegram",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             4,
             None,
             Some(tx),
@@ -13685,6 +13922,7 @@ Let me check the result."#;
                     "test",
                     None,
                     &zeroclaw_config::schema::MultimodalConfig::default(),
+                    None, // vision_provider
                     2,
                     None,
                     None,
@@ -13742,6 +13980,7 @@ Let me check the result."#;
             "test",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             2,
             None,
             None,
@@ -13837,6 +14076,7 @@ Let me check the result."#;
                     "test",
                     None,
                     &zeroclaw_config::schema::MultimodalConfig::default(),
+                    None, // vision_provider
                     2,
                     None,
                     None,
@@ -13899,6 +14139,7 @@ Let me check the result."#;
             "test",
             None,
             &zeroclaw_config::schema::MultimodalConfig::default(),
+            None, // vision_provider
             2,
             None,
             None,

@@ -4,6 +4,7 @@ use std::path::Path;
 use tokio::fs;
 use zeroclaw_config::providers::ModelProviderRef;
 use zeroclaw_config::schema::{AliasedAgentConfig, Config};
+use zeroclaw_providers::create_model_provider;
 
 pub struct AgentzWorkflow;
 
@@ -636,6 +637,335 @@ fn run_specialized_agent<'a>(
     })
 }
 
+/// Variant of `run_specialized_agent` that accepts a pre-resolved vision-capable
+/// model provider. Used by `run_vision_agent` to ensure the vision-agent uses
+/// a provider that supports vision input.
+fn run_specialized_agent_with_vision_provider<'a>(
+    config: &'a Config,
+    agents_dir: &'a Path,
+    agent_name: &'a str,
+    prompt: &'a str,
+    allowed_tools: Option<Vec<String>>,
+    vision_provider: Option<(String, String)>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
+    Box::pin(async move {
+        let prompt_file = agents_dir.join(format!("{}.md", agent_name));
+        let system_prompt = if prompt_file.exists() {
+            fs::read_to_string(&prompt_file).await.unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut custom_config = config.clone();
+
+        // Resolve base fallback model provider if none configured
+        let mut default_model_provider = "openai.default".to_string();
+        for p in [
+            "google.default",
+            "groq.default",
+            "openai.default",
+            "anthropic.default",
+        ] {
+            let provider_name = p.split('.').next().unwrap();
+            if config
+                .providers
+                .models
+                .iter_entries()
+                .any(|(p_type, _, _)| p_type == provider_name)
+            {
+                default_model_provider = p.to_string();
+                break;
+            }
+        }
+
+        // Find primary agent's model provider and fallbacks if configured
+        let primary_cfg = config
+            .agents
+            .get("agentz")
+            .or_else(|| config.agents.get("oh-my-openagent"))
+            .cloned();
+
+        let (resolved_default_provider, primary_fallbacks) = if let Some(p_cfg) = &primary_cfg {
+            (
+                p_cfg.model_provider.as_str().to_string(),
+                p_cfg.model_fallbacks.clone(),
+            )
+        } else {
+            (default_model_provider, vec![])
+        };
+
+        let mut agent_cfg = custom_config
+            .agents
+            .get(agent_name)
+            .cloned()
+            .unwrap_or_else(|| {
+                let mut default_agent = AliasedAgentConfig::default();
+                default_agent.model_provider = ModelProviderRef::new(resolved_default_provider);
+                default_agent.model_fallbacks = primary_fallbacks.clone();
+                default_agent.risk_profile = "default".to_string();
+                default_agent.runtime_profile = "default".to_string();
+                default_agent
+            });
+
+        // If a vision provider was resolved, use it as the primary provider for this agent
+        if let Some((ref vp_name, _vp_model)) = vision_provider {
+            agent_cfg.model_provider = ModelProviderRef::new(vp_name.clone());
+            // Build vision-specific fallback chain (prefer other vision-capable providers)
+            agent_cfg.model_fallbacks = build_vision_fallback_chain(config, vp_name);
+        }
+
+        let agent_workspace = custom_config.agent_workspace_dir(agent_name);
+        if !system_prompt.is_empty() {
+            fs::create_dir_all(&agent_workspace).await.ok();
+            fs::write(agent_workspace.join("IDENTITY.md"), &system_prompt)
+                .await
+                .ok();
+        }
+
+        let primary_provider = agent_cfg.model_provider.clone();
+        let mut fallbacks = agent_cfg.model_fallbacks.clone();
+
+        if fallbacks.is_empty() {
+            for p in [
+                "google.default",
+                "groq.default",
+                "openai.default",
+                "anthropic.default",
+            ] {
+                let provider_name = p.split('.').next().unwrap();
+                if config
+                    .providers
+                    .models
+                    .iter_entries()
+                    .any(|(p_type, _, _)| p_type == provider_name)
+                {
+                    fallbacks.push(p.to_string());
+                }
+            }
+        }
+
+        let mut attempt_providers = vec![primary_provider];
+        attempt_providers.extend(fallbacks.into_iter().map(ModelProviderRef::new));
+        attempt_providers.retain(|p| !p.as_str().trim().is_empty());
+
+        // Deduplicate
+        let mut seen = std::collections::HashSet::new();
+        attempt_providers.retain(|p| seen.insert(p.clone()));
+
+        if attempt_providers.is_empty() {
+            attempt_providers.push(ModelProviderRef::new("openai.default"));
+        }
+
+        custom_config
+            .agents
+            .insert(agent_name.to_string(), agent_cfg);
+
+        // Resource Scoping (Tool/MCP Filtering)
+        if let Some(ref tools) = allowed_tools {
+            let has_mcp = tools.iter().any(|t| t.starts_with("mcp_"));
+            if !has_mcp {
+                custom_config.mcp.enabled = false;
+                custom_config.mcp.servers.clear();
+            } else {
+                custom_config.mcp.servers.retain(|server| {
+                    let prefix = format!("mcp_{}", server.name);
+                    tools.iter().any(|t| t.starts_with(&prefix))
+                });
+                if custom_config.mcp.servers.is_empty() {
+                    custom_config.mcp.enabled = false;
+                }
+            }
+        }
+
+        let timeout_duration = match agent_name {
+            "vision-agent" => std::time::Duration::from_secs(180),
+            "research-agent" => std::time::Duration::from_secs(300),
+            "openz-planagent" => std::time::Duration::from_secs(300),
+            "coder" | "worker" => std::time::Duration::from_secs(900),
+            "reviewer" => std::time::Duration::from_secs(600),
+            "docs-agent" => std::time::Duration::from_secs(300),
+            _ => std::time::Duration::from_secs(600),
+        };
+
+        let mut last_error = None;
+        for provider in attempt_providers {
+            let mut try_config = custom_config.clone();
+            if let Some(cfg) = try_config.agents.get_mut(agent_name) {
+                cfg.model_provider = provider.clone();
+            }
+
+            let overrides = AgentRunOverrides {
+                is_subagent: true,
+                ..Default::default()
+            };
+
+            println!(
+                "Running subagent {} with model provider: {} (timeout: {:?})...",
+                agent_name, provider, timeout_duration
+            );
+
+            let run_future = crate::agent::run_boxed(
+                try_config,
+                agent_name,
+                Some(prompt.to_string()),
+                None,
+                None,
+                None,
+                vec![],
+                false, // non-interactive
+                None,
+                allowed_tools.clone(),
+                overrides,
+            );
+
+            match tokio::time::timeout(timeout_duration, Box::pin(run_future)).await {
+                Ok(Ok(res)) => return Ok(res),
+                Ok(Err(e)) => {
+                    println!(
+                        "{}",
+                        console::style(format!(
+                            "Attempt with {} failed: {:#}. Trying fallback...",
+                            provider, e
+                        ))
+                        .yellow()
+                    );
+                    last_error = Some(e);
+                }
+                Err(_) => {
+                    println!(
+                        "{}",
+                        console::style(format!(
+                            "Attempt with {} timed out after {:?}. Trying fallback...",
+                            provider, timeout_duration
+                        ))
+                        .yellow()
+                    );
+                    last_error = Some(anyhow::anyhow!("Timeout after {:?}", timeout_duration));
+                }
+            }
+        }
+
+        let err = last_error.unwrap_or_else(|| {
+            anyhow::anyhow!("No model providers available for subagent {}", agent_name)
+        });
+
+        ::zeroclaw_log::record!(
+            ERROR,
+            ::zeroclaw_log::Event::new(module_path!(), ::zeroclaw_log::Action::Fail)
+                .with_outcome(::zeroclaw_log::EventOutcome::Failure)
+                .with_attrs(::serde_json::json!({
+                    "subagent": agent_name,
+                    "error": format!("{}", err)
+                })),
+            &format!(
+                "Subagent '{}' failed. Primary agent will execute the task itself.",
+                agent_name
+            )
+        );
+
+        println!(
+            "{}",
+            console::style(format!(
+                "⚠️ Subagent '{}' failed: {:#}. Falling back to Primary Agent...",
+                agent_name, err
+            ))
+            .red()
+            .bold()
+        );
+
+        let primary_agent_name = if config.agents.contains_key("agentz") {
+            "agentz"
+        } else if config.agents.contains_key("oh-my-openagent") {
+            "oh-my-openagent"
+        } else if config.agents.contains_key("assistant") {
+            "assistant"
+        } else {
+            config
+                .agents
+                .keys()
+                .next()
+                .map(|s| s.as_str())
+                .unwrap_or("assistant")
+        };
+
+        let try_config = custom_config.clone();
+        let overrides = AgentRunOverrides {
+            is_subagent: false,
+            ..Default::default()
+        };
+
+        let run_future = crate::agent::run_boxed(
+            try_config,
+            primary_agent_name,
+            Some(prompt.to_string()),
+            None,
+            None,
+            None,
+            vec![],
+            false,
+            None,
+            allowed_tools.clone(),
+            overrides,
+        );
+
+        match tokio::time::timeout(timeout_duration, Box::pin(run_future)).await {
+            Ok(Ok(res)) => Ok(res),
+            Ok(Err(e)) => Err(anyhow::anyhow!(
+                "Primary agent execution also failed: {:#}",
+                e
+            )),
+            Err(_) => Err(anyhow::anyhow!(
+                "Primary agent execution timed out after {:?}",
+                timeout_duration
+            )),
+        }
+    })
+}
+
+/// Build a fallback chain for vision-capable providers, excluding the primary.
+fn build_vision_fallback_chain(config: &Config, primary_provider: &str) -> Vec<String> {
+    let mut fallbacks = Vec::new();
+    let vision_providers = [
+        ("google", "gemini-1.5-flash"),
+        ("openai", "gpt-4o-mini"),
+        ("anthropic", "claude-3-5-sonnet-latest"),
+    ];
+
+    for (provider, _model) in vision_providers {
+        let provider_key = format!("{}.default", provider);
+        if provider_key != primary_provider
+            && config
+                .providers
+                .models
+                .iter_entries()
+                .any(|(p_type, _, _)| p_type == provider)
+        {
+            fallbacks.push(provider_key);
+        }
+    }
+
+    // Add generic fallbacks
+    for p in [
+        "google.default",
+        "groq.default",
+        "openai.default",
+        "anthropic.default",
+    ] {
+        let provider_name = p.split('.').next().unwrap();
+        if !fallbacks.contains(&p.to_string())
+            && config
+                .providers
+                .models
+                .iter_entries()
+                .any(|(p_type, _, _)| p_type == provider_name)
+        {
+            fallbacks.push(p.to_string());
+        }
+    }
+
+    fallbacks
+}
+
 fn run_research_agent<'a>(
     config: &'a Config,
     agents_dir: &'a Path,
@@ -779,6 +1109,54 @@ fn run_docs_agent<'a>(
     })
 }
 
+/// Resolve a vision-capable model provider for the vision-agent.
+/// Mirrors the logic in `loop_.rs`: checks configured `vision_model_provider`,
+/// then auto-detects from environment (Gemini, OpenAI, Anthropic).
+fn resolve_vision_model_provider(config: &Config) -> Option<(String, String)> {
+    let multimodal = &config.multimodal;
+
+    // 1. Check explicitly configured vision_model_provider
+    if let Some(ref vp) = multimodal.vision_model_provider {
+        if let Ok(vp_instance) = create_model_provider(vp, None) {
+            if vp_instance.supports_vision() {
+                let vm = multimodal.vision_model.clone().unwrap_or_else(|| {
+                    // Default model for known vision providers
+                    match vp.as_str() {
+                        "google" | "google.default" => "gemini-1.5-flash".to_string(),
+                        "openai" | "openai.default" => "gpt-4o-mini".to_string(),
+                        "anthropic" | "anthropic.default" => "claude-3-5-sonnet-latest".to_string(),
+                        _ => "default".to_string(),
+                    }
+                });
+                return Some((vp.clone(), vm));
+            }
+        }
+    }
+
+    // 2. Auto-detect from environment variables
+    if std::env::var("GEMINI_API_KEY").is_ok() {
+        if let Ok(vp_instance) = create_model_provider("google", None) {
+            if vp_instance.supports_vision() {
+                return Some(("google".to_string(), "gemini-1.5-flash".to_string()));
+            }
+        }
+    } else if std::env::var("OPENAI_API_KEY").is_ok() {
+        if let Ok(vp_instance) = create_model_provider("openai", None) {
+            if vp_instance.supports_vision() {
+                return Some(("openai".to_string(), "gpt-4o-mini".to_string()));
+            }
+        }
+    } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        if let Ok(vp_instance) = create_model_provider("anthropic", None) {
+            if vp_instance.supports_vision() {
+                return Some(("anthropic".to_string(), "claude-3-5-sonnet-latest".to_string()));
+            }
+        }
+    }
+
+    None
+}
+
 fn run_vision_agent<'a>(
     config: &'a Config,
     agents_dir: &'a Path,
@@ -791,12 +1169,16 @@ fn run_vision_agent<'a>(
             instructions, prompt_with_image
         );
 
-        run_specialized_agent(
+        // Resolve a vision-capable model provider for the vision-agent
+        let vision_provider = resolve_vision_model_provider(config);
+
+        run_specialized_agent_with_vision_provider(
             config,
             agents_dir,
             "vision-agent",
             &vision_prompt,
             Some(vec!["file_read".to_string(), "image_info".to_string()]),
+            vision_provider,
         )
         .await
     })

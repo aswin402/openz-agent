@@ -49,12 +49,9 @@ tempfile = "3.26"
 tokio = { version = "1.50", features = ["rt-multi-thread", "macros"] }
 
 [features]
-# `channel-nostr` and `voice-wake` features were removed 2026-06-02 (channels
-# trimmed to discord + telegram + whatsapp-web + acp-server). The schema
-# fields `channels.nostr` and `channels.voice_wake` remain (unconditioned) for
-# backward config compatibility but are unused by the active runtime. They can
-# be deleted in a follow-up if confirmed no user has them in their config.
 default = ["schema-export", "clap"]
 schema-export = ["dep:schemars"]
 clap = ["dep:clap"]
 memory-postgres = ["dep:postgres"]
+channel-nostr = []
+voice-wake = []

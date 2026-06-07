@@ -2729,6 +2729,13 @@ pub struct AliasedAgentConfig {
     /// Whether this agent is active. Set false to disable without removing the definition.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Human-readable description of what this agent does. Used by the
+    /// orchestrator for dynamic subagent discovery — when non-empty, the
+    /// orchestrator lists this agent as spawnable and auto-dispatch may
+    /// match the description against user messages.
+    /// Example: "Reviews Rust code for safety violations".
+    #[serde(default)]
+    pub description: String,
     /// Channel aliases this agent handles (e.g. `["telegram.<alias>", "discord.<alias>"]`).
     /// Each entry is a `ChannelRef` resolving through `[channels.<type>.<alias>]`;
     /// `Config::validate()` fails loud on dangling references.
@@ -2938,6 +2945,7 @@ impl Default for AliasedAgentConfig {
             workspace: crate::multi_agent::AgentWorkspaceConfig::default(),
             memory: crate::multi_agent::AgentMemoryConfig::default(),
             identity: IdentityConfig::default(),
+            description: String::new(),
         }
     }
 }

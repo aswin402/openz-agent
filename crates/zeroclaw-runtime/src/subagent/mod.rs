@@ -25,6 +25,21 @@
 //! use the alias verbatim per the trait default. Holding aliases at
 //! this layer means [`SubAgentSpawn::for_agent`] does not need a
 //! backend handle to construct.
+//!
+//! ## Primary-model authority over running subagents
+//!
+//! A running SubAgent registers a [`SubAgentHandle`] in the process-wide
+//! [`SubAgentRegistry`] on entry. The primary model — the agent the
+//! user interacts with — has authority over the SubAgents it has
+//! spawned and exposes that authority through the `subagent_manage`
+//! tool (spawn / list / status / stop / set_model). The registry is
+//! runtime-only state (a cache of in-flight runs), not a duplicate of
+//! canonical config: the canonical identity of an agent still lives
+//! under `[agents.<alias>]`, and the handle re-resolves that identity
+//! from `Config` on every operation.
+
+pub mod orchestrator;
+pub mod registry;
 
 use anyhow::{Context, Result};
 use std::collections::HashSet;
@@ -32,6 +47,10 @@ use std::sync::Arc;
 
 use zeroclaw_config::policy::SecurityPolicy;
 use zeroclaw_config::schema::Config;
+
+pub use self::registry::{
+    ActiveSubAgentInfo, SubAgentHandle, SubAgentId, SubAgentRegistry, SubAgentStatus,
+};
 
 /// Optional narrowing applied to a SubAgent at spawn time. `None` on
 /// every field means "inherit parent verbatim"; `Some(...)` narrows.

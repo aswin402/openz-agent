@@ -122,6 +122,11 @@ pub enum ToolKind {
     Search,
     Memory,
     SpawnSubagent,
+    /// Primary-model authority surface for the SubAgent lifecycle
+    /// (spawn / list / status / stop / set_model). Distinct from
+    /// `SpawnSubagent` so log emissions and audit traces can show
+    /// which authority action the primary took.
+    SubAgentManage,
     SopList,
     SopExecute,
     SopApprove,

@@ -205,8 +205,8 @@ crossterm = { version = "0.29", features = ["event-stream"], optional = true }
 # Hardware discovery (device path globbing)
 glob = { version = "0.3", optional = true }
 
-# Nostr key validation for wizard (behind channel-nostr feature)
-# nostr-sdk removed 2026-06-02: channel-nostr feature was trimmed (channels trimmed to 3+acp)
+# Nostr key validation for wizard, nostr-sdk (channel-nostr feature)
+nostr-sdk = { version = "0.44", default-features = false, optional = true }
 
 # Binary discovery (init system detection)
 which = { version = "8.0", optional = true }
@@ -223,7 +223,10 @@ rustls-pki-types = { version = "1.14.0", optional = true }
 tokio-rustls = { version = "0.26.4", optional = true }
 webpki-roots = { version = "1.0.6", optional = true }
 
-# email deps removed 2026-06-02: channel-email feature was trimmed (channels: 3+acp only)
+# email deps (channel-email)
+async-imap = { version = "0.11", features = ["runtime-tokio"], default-features = false, optional = true }
+lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"], optional = true }
+mail-parser = { version = "0.11.2", optional = true }
 
 # HTTP server (gateway) — replaces raw TCP for proper HTTP/1.1 compliance
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws", "macros"], optional = true }
@@ -233,8 +236,7 @@ tower = { version = "0.5", default-features = false, features = ["util"], option
 tower-http = { version = "0.6", default-features = false, features = ["limit", "timeout"], optional = true }
 http-body-util = { version = "0.1", optional = true }
 
-# rust-embed removed — web dashboard served from filesystem via gateway.web_dist_dir
-# mime_guess still needed by gateway feature (was used by channel-matrix+channel-wechat too, those were trimmed)
+# mime_guess needed by gateway and channel-matrix/channel-wechat
 mime_guess = { version = "2", optional = true }
 
 # Use the blocking HTTP exporter client to avoid Tokio-reactor panics in
@@ -282,7 +284,33 @@ tui-onboarding = ["dep:zeroclaw-tui"]
 schema-export = ["zeroclaw-config/schema-export"]
 acp-bridge = ["dep:tokio-tungstenite"]
 
-# Channels (trimmed 2026-06-02: kept only discord + telegram + whatsapp-web + acp-server)
+# Channels (opt-in; only discord + telegram + whatsapp-web + acp-server in default)
+channel-bluesky = ["zeroclaw-channels/channel-bluesky"]
+channel-clawdtalk = ["zeroclaw-channels/channel-clawdtalk"]
+channel-dingtalk = ["zeroclaw-channels/channel-dingtalk"]
+channel-email = ["zeroclaw-channels/channel-email", "dep:lettre", "dep:mail-parser", "dep:async-imap"]
+channel-imessage = ["zeroclaw-channels/channel-imessage"]
+channel-irc = ["zeroclaw-channels/channel-irc"]
+channel-lark = ["zeroclaw-channels/channel-lark"]
+channel-line = ["zeroclaw-channels/channel-line"]
+channel-linq = ["zeroclaw-channels/channel-linq"]
+channel-matrix = ["zeroclaw-channels/channel-matrix", "dep:mime_guess"]
+channel-mattermost = ["zeroclaw-channels/channel-mattermost"]
+channel-mochat = ["zeroclaw-channels/channel-mochat"]
+channel-nextcloud = ["zeroclaw-channels/channel-nextcloud"]
+channel-nostr = ["zeroclaw-channels/channel-nostr", "zeroclaw-config/channel-nostr", "dep:nostr-sdk"]
+channel-notion = ["zeroclaw-channels/channel-notion"]
+channel-qq = ["zeroclaw-channels/channel-qq"]
+channel-reddit = ["zeroclaw-channels/channel-reddit"]
+channel-signal = ["zeroclaw-channels/channel-signal"]
+channel-slack = ["zeroclaw-channels/channel-slack"]
+channel-twitter = ["zeroclaw-channels/channel-twitter"]
+channel-voice-call = ["zeroclaw-channels/channel-voice-call"]
+channel-wati = ["zeroclaw-channels/channel-wati"]
+channel-webhook = ["zeroclaw-channels/channel-webhook"]
+channel-wechat = ["zeroclaw-channels/channel-wechat"]
+channel-wecom = ["zeroclaw-channels/channel-wecom"]
+voice-wake = ["zeroclaw-channels/voice-wake", "zeroclaw-config/voice-wake"]
 channel-telegram = ["zeroclaw-channels/channel-telegram"]
 channel-discord = ["zeroclaw-channels/channel-discord"]
 channel-whatsapp-cloud = ["zeroclaw-channels/channel-whatsapp-cloud"]
